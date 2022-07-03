@@ -36,7 +36,7 @@ See [releases](https://github.com/DEROFDN/Engram/releases) for the latest builds
 
 * go get github.com/deroproject/derohe
 * go get fyne.io/fyne/v2
-* go get github.com/civilware/deropkg
+* go get github.com/civilware/derodpkg
 * go get github.com/civilware/Gnomon
 * go get github.com/blang/semver
 * go get github.com/sirupsen/logrus
