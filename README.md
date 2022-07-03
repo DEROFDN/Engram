@@ -1,6 +1,6 @@
 ![Powered by DERO](https://github.com/DEROFDN/Engram/blob/main/ss1.png)
 
-![Account Overview](https://github.com/DEROFDN/Engram/blob/main/ss2.png)
+
 
 ## Pre-release Alpha Testing
 ### This software is still under heavy development.
