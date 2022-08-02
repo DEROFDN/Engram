@@ -504,9 +504,14 @@ func layoutDashboard() fyne.CanvasObject {
 
 	wAmount.SetValidationError(nil)
 
+	var err error
+
 	wPaymentID := widget.NewEntry()
 	wPaymentID.OnChanged = func(s string) {
-		tx.PaymentID = 0
+		tx.PaymentID, err = strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			tx.PaymentID = 0
+		}
 	}
 	wPaymentID.SetPlaceHolder("Payment ID / Service Port")
 
