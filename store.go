@@ -1,5 +1,4 @@
-//	Copyright 2021-2022 DERO Foundation. All rights reserved.
-//	Mikoshi v0.0.1
+// Copyright 2023-2024 DERO Foundation. All rights reserved.
 //
 // Use of this source code in any form is governed by RESEARCH license.
 // license can be found in the LICENSE file.
@@ -17,17 +16,14 @@
 package main
 
 import (
-	"bytes"
-	"crypto/rand"
 	"crypto/sha1"
 	"errors"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/deroproject/graviton"
-	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // Get Engram's working directory
@@ -37,10 +33,30 @@ func GetDir() (result string, err error) {
 		return
 	}
 
-	if !session.Network {
-		result += string(filepath.Separator) + "testnet" + string(filepath.Separator)
+	if runtime.GOOS == "darwin" {
+		if !session.Testnet {
+			result = filepath.Join(AppPath(), "Contents", "Resources", "mainnet") + string(filepath.Separator)
+		} else {
+			result = filepath.Join(AppPath(), "Contents", "Resources", "testnet") + string(filepath.Separator)
+		}
+	} else if runtime.GOOS == "android" {
+		if !session.Testnet {
+			result = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
+		} else {
+			result = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
+		}
+	} else if runtime.GOOS == "ios" {
+		if !session.Testnet {
+			result = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
+		} else {
+			result = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
+		}
 	} else {
-		result += string(filepath.Separator) + "mainnet" + string(filepath.Separator)
+		if !session.Testnet {
+			result = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
+		} else {
+			result = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
+		}
 	}
 
 	return
@@ -48,19 +64,12 @@ func GetDir() (result string, err error) {
 
 // Get a datashard's path
 func GetShard() (result string, err error) {
-	result = ""
-	wd, err := os.Getwd()
-
 	if engram.Disk == nil {
-		//if session.Domain == "app.settings" {
-		result = wd + "/datashards/settings/"
-		//}
-
+		result = filepath.Join(AppPath(), "datashards", "settings")
 		return
 	} else {
 		address := engram.Disk.GetAddress().String()
-		result = wd + "/datashards/" + fmt.Sprintf("%x", sha1.Sum([]byte(address)))
-
+		result = filepath.Join(AppPath(), "datashards", fmt.Sprintf("%x", sha1.Sum([]byte(address))))
 		return
 	}
 }
@@ -81,7 +90,7 @@ func StoreEncryptedValue(t string, key []byte, value []byte) (err error) {
 		return
 	}
 
-	eValue, err := Encrypt(value)
+	eValue, err := engram.Disk.Encrypt(value)
 	if err != nil {
 		return
 	}
@@ -241,7 +250,7 @@ func GetEncryptedValue(t string, key []byte) (result []byte, err error) {
 		return
 	}
 
-	result, err = Decrypt(eValue)
+	result, err = engram.Disk.Decrypt(eValue)
 	if err != nil {
 		return
 	}
@@ -249,105 +258,44 @@ func GetEncryptedValue(t string, key []byte) (result []byte, err error) {
 	return
 }
 
-// Use a key and nonce to seal the data
-func EncryptWithKey(Key []byte, Data []byte) (result []byte, err error) {
-	nonce := make([]byte, chacha20poly1305.NonceSize, chacha20poly1305.NonceSize)
-	cipher, err := chacha20poly1305.New(Key)
+// Delete a key-value in a Graviton tree
+func DeleteKey(t string, key []byte) (err error) {
+	if t == "" {
+		err = errors.New("error: missing graviton tree input")
+		return
+	} else if key == nil {
+		err = errors.New("error: missing graviton key input")
+		return
+	}
+
+	shard, err := GetShard()
 	if err != nil {
 		return
 	}
 
-	_, err = rand.Read(nonce)
-	if err != nil {
-		return
-	}
-	Data = cipher.Seal(Data[:0], nonce, Data, nil)
-
-	result = append(Data, nonce...)
-	return
-}
-
-// Use a key and extract 12 byte nonce from the data and unseal the data
-func DecryptWithKey(Key []byte, Data []byte) (result []byte, err error) {
-
-	// make sure data is atleast 28 byte, 16 bytes of AEAD cipher and 12 bytes of nonce
-	if len(Data) < 28 {
-		err = errors.New("error: invalid data")
-		return
-	}
-
-	data_without_nonce := Data[0 : len(Data)-chacha20poly1305.NonceSize]
-
-	nonce := Data[len(Data)-chacha20poly1305.NonceSize:]
-
-	cipher, err := chacha20poly1305.New(Key)
+	store, err := graviton.NewDiskStore(shard)
 	if err != nil {
 		return
 	}
 
-	return cipher.Open(result[:0], nonce, data_without_nonce, nil)
-
-}
-
-// Encrypt data using the wallet's public key
-// Trim the public key to 32 bytes
-func Encrypt(Data []byte) (result []byte, err error) {
-	keys := engram.Disk.Get_Keys()
-	key := []byte(keys.Public.StringHex())
-	key = key[:len(key)-34]
-
-	return EncryptWithKey(key, Data)
-}
-
-// Decrypt data using the wallet's public key
-// Trim the public key to 32 bytes
-func Decrypt(Data []byte) (result []byte, err error) {
-	keys := engram.Disk.Get_Keys()
-	key := []byte(keys.Public.StringHex())
-	key = key[:len(key)-34]
-
-	return DecryptWithKey(key, Data)
-}
-
-func NewRandomByte(n int) (char []byte) {
-	const pool = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-"
-	char = make([]byte, n)
-
-	for i := 0; i < n; i++ {
-		selection, _ := rand.Int(rand.Reader, big.NewInt(int64(len(pool))))
-
-		char[i] = pool[selection.Int64()]
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return
 	}
 
-	return
-}
-
-// Generate a 32 byte key from a wallet public key
-func newSequenceKey() (key []byte, sequence []byte) {
-	keys := engram.Disk.Get_Keys()
-	key = []byte(keys.Public.StringHex())
-
-	for i := len(key); i != 32; {
-		if len(key) < 32 {
-			key = append(key, "@"...)
-			sequence = append(sequence, "@"...)
-		} else {
-			char := NewRandomByte(1)
-			sequence = append(sequence, char...)
-			key = bytes.Trim(key, string(char[0]))
-		}
+	tree, err := ss.GetTree(t)
+	if err != nil {
+		return
 	}
 
-	return
-}
+	err = tree.Delete(key)
+	if err != nil {
+		return
+	}
 
-// Use a given sequence to decode the key
-func resequence(sequence []byte) (key []byte) {
-	keys := engram.Disk.Get_Keys()
-	key = []byte(keys.Public.StringHex())
-
-	for i := 0; i < len(sequence); i++ {
-		key = bytes.Trim(key, string(sequence[i]))
+	_, err = graviton.Commit(tree)
+	if err != nil {
+		return
 	}
 
 	return

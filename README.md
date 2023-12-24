@@ -2,54 +2,55 @@
 
 
 
-## Pre-release Alpha Testing
-### This software is still under heavy development.
+## Beta Release
 
+### The Engram smart wallet allows easy and secure management of DERO assets. 
 
+### Included Features
+* Privately send and receive money globally
+* On-chain encrypted private messaging
+* Dynamically interact with smart contracts
+* Native asset tracking
+* Register and transfer user-friendly addresses (usernames)
+* Gnomon integration for blockchain indexing
+* Encrypted Notepad
 
-Engram is an open source smart wallet with native support for Golang. The goals were to provide a user-friendly interface with access to all DERO features and services, and to showcase creative ways to deploy modern UIs on Golang. With Engram, you are in total control of your digital presence with state-of-the-art privacy technology, only available within the DERO network. Join the movement to advance our <b>#PrivacyTogether</b> initiative.
+### Upcoming Features
+* Web socket support for dApp/web3 connections
+* Sign files using your wallet to guarantee authenticity
+* Multi-language support
 
-## Included Features
-* Core Wallet Support
-* Easy UI/UX
-* Private Messaging
-* Asset Tracking
-* Username Support
-* Gnomon Support
-* Integrated Daemon
-* Integrated Miner
-
-## Releases
+### Releases
 Engram is portable. We plan to deploy releases on the following platforms:
 * Windows
 * Linux
 * Mac OS
-* Raspberry Pi
-* Android
 * iOS
+* Android
 
 See [releases](https://github.com/DEROFDN/Engram/releases) for the latest builds.
 
-## Build
+### Build
 
-<b>Required Dependencies</b>
+<b>Required Processes</b>
 
-* go get github.com/deroproject/derohe
-* go get fyne.io/fyne/v2
-* go get github.com/civilware/derodpkg
-* go get github.com/civilware/Gnomon
-* go get github.com/blang/semver
-* go get github.com/sirupsen/logrus
+* git clone github.com/DEROFDN/Engram.git
+* cd Engram
+* go build .
+
+Build for production:
+
+* fyne package -name Engram -os windows -icon path\to\icon.png
 
 Please see: https://developer.fyne.io/
 
 You are required to have all the dependencies for Fyne too. Specifically (if you are on windows), <b>TDM-GCC-64</b>.
 
-## Contributing
+### Contributing
 
 Issues and pull requests are welcome, but will need to be reviewed by DERO Foundation developers.
 
-## Donations
+### Donations
 
 All donations will be used for continued development and to further the scope and reach of foundation activities.
 

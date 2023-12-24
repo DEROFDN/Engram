@@ -1,4 +1,4 @@
-// Copyright 2021-2022 DERO Foundation. All rights reserved.
+// Copyright 2023-2024 DERO Foundation. All rights reserved.
 // Use of this source code in any form is governed by RESEARCH license.
 // license can be found in the LICENSE file.
 //
@@ -15,64 +15,61 @@
 package main
 
 import (
-	//"image/color"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
-	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
-
-	"github.com/kbinani/screenshot"
+	x "fyne.io/x/fyne/widget"
 )
 
 type Res struct {
-	bg           *canvas.Image
-	bg2          *canvas.Image
-	bg3          *canvas.Image
-	bg300        *canvas.Image
-	icon         *canvas.Image
-	icon_sm      *canvas.Image
-	load         *canvas.Image
-	header       *canvas.Image
-	spacer       *canvas.Image
-	dero         *canvas.Image
-	enter        *canvas.Image
-	gram         *canvas.Image
-	gram_footer  *canvas.Image
-	login_footer *canvas.Image
-	rpc_header   *canvas.Image
-	nr_header    *canvas.Image
-	rpc_footer   *canvas.Image
-	nr_footer    *canvas.Image
-	nft_header   *canvas.Image
-	nft_footer   *canvas.Image
-	home_header  *canvas.Image
-	home_footer  *canvas.Image
+	bg          *canvas.Image
+	bg2         *canvas.Image
+	icon        *canvas.Image
+	icon_sm     *canvas.Image
+	load        *canvas.Image
+	loading     *x.AnimatedGif
+	header      *canvas.Image
+	spacer      *canvas.Image
+	dero        *canvas.Image
+	gram        *canvas.Image
+	block       *canvas.Image
+	red_alert   *canvas.Image
+	green_alert *canvas.Image
 }
 
 // Get app path
-func AppPath() string {
-	app, _ := os.Executable()
-	path := filepath.Dir(app)
+func AppPath() (result string) {
+	result, _ = os.Getwd()
+	if runtime.GOOS == "android" {
+		result = a.Storage().RootURI().Path()
+	} else if runtime.GOOS == "ios" {
+		result = a.Storage().RootURI().Path()
+	}
 
-	return path
+	return
 }
 
-func LoadAsset(p string) fyne.Resource {
-	a := AppPath()
-	r, _ := fyne.LoadResourceFromPath(a + p)
-
-	return r
-}
-
-func GetAccounts() (result []string) {
+func GetAccounts() (result []string, err error) {
 	path := ""
-	if !session.Network {
-		path = AppPath() + string(filepath.Separator) + "testnet" + string(filepath.Separator)
+
+	if !session.Testnet {
+		_, err = os.Stat(filepath.Join(AppPath(), "mainnet"))
+		if err != nil {
+			return
+		} else {
+			path = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
+		}
 	} else {
-		path = AppPath() + string(filepath.Separator) + "mainnet" + string(filepath.Separator)
+		_, err = os.Stat(filepath.Join(AppPath(), "testnet"))
+		if err != nil {
+			return
+		} else {
+			path = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
+		}
 	}
 
 	matches, _ := filepath.Glob(path + "*.db")
@@ -98,16 +95,6 @@ func GetAccounts() (result []string) {
 }
 
 func findAccount() (result bool) {
-	/*
-		path := AppPath() + string(filepath.Separator)
-		folder := ""
-		if !session.Network {
-			folder = "testnet"
-		} else {
-			folder = "mainnet"
-		}
-	*/
-
 	matches, err := filepath.Glob(session.Path)
 	if err != nil {
 		fmt.Printf("%s\n", err)
@@ -123,30 +110,18 @@ func findAccount() (result bool) {
 }
 
 func checkDir() (err error) {
-	_, err = os.Stat(AppPath() + string(filepath.Separator) + "testnet")
-	if os.IsNotExist(err) {
-		err = os.MkdirAll("testnet", 0755)
-		if err != nil {
-			panic(err)
-		}
+	err = os.MkdirAll(filepath.Join(AppPath(), "mainnet"), os.ModePerm)
+	if err != nil {
+		return
 	}
-
-	_, err = os.Stat(AppPath() + string(filepath.Separator) + "mainnet")
-	if os.IsNotExist(err) {
-		err = os.MkdirAll("mainnet", 0755)
-		if err != nil {
-			panic(err)
-		}
+	err = os.MkdirAll(filepath.Join(AppPath(), "testnet"), os.ModePerm)
+	if err != nil {
+		return
 	}
-
-	return
-}
-
-func GetResolution() (x float32, y float32) {
-	r := screenshot.GetDisplayBounds(0)
-
-	x = float32(r.Dx())
-	y = float32(r.Dy())
+	err = os.MkdirAll(filepath.Join(AppPath(), "datashards"), os.ModePerm)
+	if err != nil {
+		return
+	}
 
 	return
 }

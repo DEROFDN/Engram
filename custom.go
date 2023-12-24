@@ -1,4 +1,4 @@
-// Copyright 2021-2022 DERO Foundation. All rights reserved.
+// Copyright 2023-2024 DERO Foundation. All rights reserved.
 // Use of this source code in any form is governed by RESEARCH license.
 // license can be found in the LICENSE file.
 //
@@ -15,254 +15,198 @@
 package main
 
 import (
-	"bytes"
-	"image"
 	"image/color"
-	"image/draw"
-	"image/gif"
-	"sync"
-	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/widget"
 )
 
-// AnimatedGif widget shows a Gif image with many frames.
-type AnimatedGif struct {
-	widget.BaseWidget
-	min fyne.Size
-
-	src               *gif.GIF
-	dst               *canvas.Image
-	remaining         int
-	stopping, running bool
-	runLock           sync.RWMutex
-}
-
-type ImageButton struct {
-	widget.BaseWidget
-	Image             *canvas.Image
-	Res               fyne.Resource
-	OnTapped          func()
-	OnTappedSecondary func()
-}
-
-type ImageButtonRenderer struct {
-	ImageButton *ImageButton
-	Object      *canvas.Image
-}
-
 type returnEntry struct {
 	widget.Entry
 }
 
-type tapRect struct {
-	canvas.Rectangle
-	Content fyne.CanvasObject
-	Object  fyne.CanvasObject
-	Fill    color.Color
+func NewReturnEntry() *returnEntry {
+	entry := &returnEntry{}
+	entry.ExtendBaseWidget(entry)
+	return entry
 }
 
-type tapRectRenderer struct {
-	e *tapRect
-}
-
-// NewAnimatedGif creates a new widget loaded to show the specified image.
-// If there is an error loading the image it will be returned in the error value.
-
-// CreateRenderer loads the widget renderer for this widget. This is an internal requirement for Fyne.
-func (g *AnimatedGif) CreateRenderer() fyne.WidgetRenderer {
-	return &gifRenderer{gif: g}
-}
-
-// MinSize returns the minimum size that this GIF can occupy.
-// Because gif images are measured in pixels we cannot use the dimensions, so this defaults to 0x0.
-// You can set a minimum size if required using SetMinSize.
-func (g *AnimatedGif) MinSize() fyne.Size {
-	return g.min
-}
-
-// SetMinSize sets the smallest possible size that this AnimatedGif should be drawn at.
-// Be careful not to set this based on pixel sizes as that will vary based on output device.
-func (g *AnimatedGif) SetMinSize(min fyne.Size) {
-	g.min = min
-}
-
-func newGif(f fyne.Resource) (*AnimatedGif, error) {
-
-	ret := &AnimatedGif{}
-	ret.ExtendBaseWidget(ret)
-	ret.dst = &canvas.Image{}
-	ret.dst.FillMode = canvas.ImageFillContain
-
-	return ret, ret.Load(f)
-}
-
-func (g *AnimatedGif) Load(f fyne.Resource) (err error) {
-	if f == nil {
-		return
+func (e *returnEntry) TypedKey(key *fyne.KeyEvent) {
+	switch key.Name {
+	case fyne.KeyReturn:
+		if session.Domain == "app.main" {
+			login()
+		} else if session.Domain == "app.register" {
+			//create()
+		}
+	default:
+		e.Entry.TypedKey(key)
 	}
-
-	data := f.Content()
-	g.CreateRenderer()
-	g.dst.Image = nil
-	g.dst.Refresh()
-
-	img, err := gif.DecodeAll(bytes.NewReader(data))
-
-	w := new(bytes.Buffer)
-	err = gif.EncodeAll(w, img)
-	if err != nil {
-		return
-	}
-
-	buffer, err := gif.DecodeAll(w)
-	if err != nil {
-		return
-	}
-
-	g.src = buffer
-	g.dst.Image = buffer.Image[0]
-	g.dst.Refresh()
-	g.Refresh()
-
-	return nil
 }
 
-// Start begins the animation. The speed of the transition is controlled by the loaded gif file.
-func (g *AnimatedGif) Start() {
-	if g.isRunning() {
-		return
+func (e *returnEntry) onReturn() {
+	login()
+}
+
+var _ fyne.Draggable = (*iframe)(nil)
+
+type iframe struct {
+	widget.BaseWidget
+}
+
+func (o *iframe) CreateRenderer() fyne.WidgetRenderer {
+	rect := canvas.NewRectangle(color.Transparent)
+	rect.SetMinSize(fyne.NewSize(ui.MaxWidth*0.99, ui.MaxHeight*0.99))
+	o.ExtendBaseWidget(o)
+	return &iframeRenderer{
+		rect: rect,
 	}
-	g.runLock.Lock()
-	g.running = true
-	g.runLock.Unlock()
+}
 
-	buffer := image.NewNRGBA(g.dst.Image.Bounds())
-	//draw.Draw(buffer, g.dst.Image.Bounds(), g.src.Image[0], image.Point{}, draw.Src)
-	g.dst.Image = buffer
-	g.dst.Refresh()
+func (o *iframe) MinSize() fyne.Size {
+	o.ExtendBaseWidget(o)
+	return o.BaseWidget.MinSize()
+}
 
-	go func() {
-		g.remaining = -1
+func (o *iframe) Tapped(e *fyne.PointEvent) {
 
-		for g.remaining != 0 {
-			for c, srcImg := range g.src.Image {
-				if g.isStopping() {
-					break
+}
+
+func (o *iframe) TappedSecondary(e *fyne.PointEvent) {
+
+}
+
+func (o *iframe) Dragged(e *fyne.DragEvent) {
+	if engram.Disk != nil {
+		if nav.PosX == 0 && nav.PosY == 0 {
+			nav.PosX = e.Position.X
+			nav.PosY = e.Position.Y
+		}
+		nav.CurX = e.Position.X
+		nav.CurY = e.Position.Y
+	}
+}
+
+func (o *iframe) DragEnd() {
+	/*
+		if engram.Disk != nil {
+			if nav.CurX > nav.PosX+30 {
+				if session.Domain == "app.wallet" {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutIdentity())
+				} else if session.Domain == "app.cyberdeck" {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutDashboard())
 				}
-				draw.Draw(buffer, g.dst.Image.Bounds(), srcImg, image.Point{}, draw.Src)
-				g.dst.Refresh()
+			} else if nav.CurX < nav.PosX-30 {
+				if session.Domain == "app.wallet" {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutCyberdeck())
+				} else if session.Domain == "app.Identity" {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutDashboard())
+				}
+			} else if nav.CurY > nav.PosY+30 {
+				if session.Domain == "app.wallet" {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutTransfers())
+				} else if session.Domain == "app.messages" {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutDashboard())
+				} else if session.Domain == "app.messages.contact" {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutMessages())
+				}
+			} else if nav.CurY < nav.PosY-30 {
+				if session.Domain == "app.wallet" {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutMessages())
+				} else if session.Domain == "app.transfers" {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutDashboard())
+				}
+			}
 
-				time.Sleep(time.Millisecond * time.Duration(g.src.Delay[c]) * 0)
+			nav.PosX = 0
+			nav.PosY = 0
+		}
+	*/
+	if engram.Disk != nil {
+		if nav.CurY > nav.PosY+30 {
+			if session.Domain == "app.messages" {
+				session.Window.SetContent(layoutTransition())
+				session.Window.SetContent(layoutMessages())
+			} else if session.Domain == "app.messages.contact" {
+				session.Window.SetContent(layoutTransition())
+				session.Window.SetContent(layoutPM())
+			} else if session.Domain == "app.Identity" {
+				session.Window.SetContent(layoutTransition())
+				session.Window.SetContent(layoutIdentity())
 			}
 		}
-
-		g.running = false
-	}()
-}
-
-// Stop will request that the animation stops running, the last frame will remain visible
-func (g *AnimatedGif) Stop() {
-	g.runLock.Lock()
-	g.stopping = true
-	g.runLock.Unlock()
-}
-
-func (g *AnimatedGif) isStopping() bool {
-	g.runLock.RLock()
-	defer g.runLock.RUnlock()
-	return g.stopping
-}
-
-func (g *AnimatedGif) isRunning() bool {
-	g.runLock.RLock()
-	defer g.runLock.RUnlock()
-	return g.running
-}
-
-type gifRenderer struct {
-	gif *AnimatedGif
-}
-
-func (g *gifRenderer) Destroy() {
-	g.gif.Stop()
-}
-
-func (g *gifRenderer) Layout(size fyne.Size) {
-	g.gif.dst.Resize(size)
-}
-
-func (g *gifRenderer) MinSize() fyne.Size {
-	return g.gif.MinSize()
-}
-
-func (g *gifRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{g.gif.dst}
-}
-
-func (g *gifRenderer) Refresh() {
-	g.gif.dst.Refresh()
-}
-
-func newImageButton(r fyne.Resource, tapFunc func()) *ImageButton {
-	img := canvas.NewImageFromResource(r)
-	img.ScaleMode = canvas.ImageScaleSmooth
-	img.FillMode = canvas.ImageFillOriginal
-	w := &ImageButton{Image: img, Res: r}
-	w.OnTapped = tapFunc
-	w.OnTappedSecondary = tapFunc
-	w.SetMinSize(fyne.NewSize(50, 50))
-	w.ExtendBaseWidget(w)
-	return w
-}
-
-func (o *ImageButton) SetMinSize(s fyne.Size) {
-	o.Image.SetMinSize(s)
-	return
-}
-
-func (o *ImageButton) Tapped(ev *fyne.PointEvent) {
-	o.OnTapped()
-}
-
-func (o *ImageButton) TappedSecondary(ev *fyne.PointEvent) {
-	o.OnTapped()
-}
-
-func (o *ImageButton) CreateRenderer() fyne.WidgetRenderer {
-	img := canvas.NewImageFromResource(o.Res)
-	img.SetMinSize(fyne.NewSize(50, 50))
-	img.FillMode = canvas.ImageFillOriginal
-	return &ImageButtonRenderer{
-		ImageButton: o,
-		Object:      img,
 	}
 }
 
-func (r *ImageButtonRenderer) Layout(fyne.Size) {
-	r.Object.ScaleMode = canvas.ImageScalePixels
-	r.Object.SetMinSize(fyne.NewSize(50, 50))
-	r.Object.Resize(fyne.NewSize(50, 50))
+var _ fyne.WidgetRenderer = (*iframeRenderer)(nil)
+
+type iframeRenderer struct {
+	rect *canvas.Rectangle
 }
 
-func (r *ImageButtonRenderer) MinSize() fyne.Size {
-	size := r.Object.MinSize()
-	return size
+func (o *iframeRenderer) BackgroundColor() color.Color {
+	return color.Transparent
 }
 
-func (r *ImageButtonRenderer) Refresh() {
-	r.Layout(r.ImageButton.MinSize())
-	r.Object.Resource = r.ImageButton.Res
-	canvas.Refresh(r.ImageButton)
-	canvas.Refresh(r.Object)
+func (o *iframeRenderer) Destroy() {
 }
 
-func (r *ImageButtonRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{r.Object}
+func (o *iframeRenderer) Layout(size fyne.Size) {
+	o.rect.Resize(size)
 }
 
-func (r *ImageButtonRenderer) Destroy() {
+func (o *iframeRenderer) MinSize() fyne.Size {
+	return o.rect.MinSize()
+}
 
+func (o *iframeRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{o.rect}
+}
+
+func (o *iframeRenderer) Refresh() {
+	o.rect.Refresh()
+}
+
+type mobileEntry struct {
+	widget.Entry
+	OnFocusLost   func()
+	OnFocusGained func()
+}
+
+func NewMobileEntry() *mobileEntry {
+	entry := &mobileEntry{}
+	entry.ExtendBaseWidget(entry)
+	return entry
+}
+
+func (o *mobileEntry) FocusGained() {
+	o.Entry.FocusGained()
+	o.OnFocusGained()
+}
+
+type contextMenuButton struct {
+	widget.Button
+	menu *fyne.Menu
+}
+
+func (o *contextMenuButton) Tapped(e *fyne.PointEvent) {
+	widget.ShowPopUpMenuAtPosition(o.menu, fyne.CurrentApp().Driver().CanvasForObject(o), e.AbsolutePosition)
+}
+
+func NewContextMenuButton(label string, image fyne.Resource, menu *fyne.Menu) *contextMenuButton {
+	o := &contextMenuButton{menu: menu}
+	o.Text = label
+	o.SetIcon(image)
+	o.ExtendBaseWidget(o)
+	return o
 }

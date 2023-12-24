@@ -1,4 +1,4 @@
-// Copyright 2021-2022 DERO Foundation. All rights reserved.
+// Copyright 2023-2024 DERO Foundation. All rights reserved.
 // Use of this source code in any form is governed by RESEARCH license.
 // license can be found in the LICENSE file.
 //
@@ -11,10 +11,11 @@
 // INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 package main
 
 import (
-	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
@@ -22,11 +23,12 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
-	"io/ioutil"
+	"io"
 	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -35,48 +37,320 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/widget"
+	x "fyne.io/x/fyne/widget"
 	"github.com/civilware/Gnomon/indexer"
+	"github.com/civilware/Gnomon/rwc"
+	"github.com/civilware/Gnomon/structures"
+	"github.com/creachadair/jrpc2"
+	"github.com/creachadair/jrpc2/channel"
+	"github.com/gorilla/websocket"
+	"mvdan.cc/xurls/v2"
+
 	"github.com/civilware/Gnomon/storage"
+	"github.com/deroproject/derohe/config"
 	"github.com/deroproject/derohe/cryptography/crypto"
+	"github.com/deroproject/derohe/dvm"
 	"github.com/deroproject/derohe/globals"
+	"github.com/deroproject/derohe/proof"
+
 	"github.com/deroproject/derohe/rpc"
 	"github.com/deroproject/derohe/transaction"
+
 	"github.com/deroproject/derohe/walletapi"
 	"github.com/deroproject/derohe/walletapi/mnemonics"
 	"github.com/deroproject/derohe/walletapi/rpcserver"
 )
 
-func initSettings() {
-	getNetwork()
-	getMode()
-	getType()
-	getDaemon()
-	getGnomon()
-	getAuthMode()
+type App struct {
+	App    fyne.App
+	Window fyne.Window
+	Focus  bool
 }
 
-// Get network setting from Graviton
-func getNetwork() {
-	result, err := GetValue("settings", []byte("network"))
-	if err != nil {
-		session.Network = true
-		globals.Arguments["--testnet"] = false
-		setNetwork(true)
-	} else {
-		if string(result) == "Testnet" {
-			session.Network = false
-			globals.Arguments["--testnet"] = true
+type UI struct {
+	Padding   float32
+	MaxWidth  float32
+	Width     float32
+	MaxHeight float32
+	Height    float32
+}
+
+type Colors struct {
+	Network    color.Color
+	Account    color.Color
+	Blue       color.Color
+	Red        color.Color
+	DarkGreen  color.Color
+	Green      color.Color
+	Gray       color.Color
+	Yellow     color.Color
+	DarkMatter color.Color
+	Cold       color.Color
+	Flint      color.Color
+}
+
+type Navigation struct {
+	PosX float32
+	PosY float32
+	CurX float32
+	CurY float32
+}
+
+type Session struct {
+	Window            fyne.Window
+	DesktopMode       bool
+	Domain            string
+	Testnet           bool
+	Offline           bool
+	Language          int
+	ID                string
+	Link              string
+	Type              string
+	Daemon            string
+	WalletOpen        bool
+	Username          string
+	Datapad           string
+	DatapadChanged    bool
+	LastBalance       uint64
+	Balance           uint64
+	BalanceUSD        string
+	BalanceText       *canvas.Text
+	BalanceUSDText    *canvas.Text
+	ModeText          *canvas.Text
+	IDText            *canvas.Text
+	LinkText          *canvas.Text
+	StatusText        *canvas.Text
+	Path              string
+	Name              string
+	Password          string
+	PasswordConfirm   string
+	DaemonHeight      uint64
+	WalletHeight      uint64
+	RPCServer         *rpcserver.RPCServer
+	Verified          bool
+	Dashboard         string
+	Error             string
+	NewUser           string
+	Gif               *x.AnimatedGif
+	RegHashes         int64
+	LimitMessages     uint64
+	TrackRecentBlocks int64
+}
+
+type Cyberdeck struct {
+	user     string
+	pass     string
+	userText *widget.Entry
+	passText *widget.Entry
+	toggle   *widget.Button
+	status   *canvas.Text
+	server   *rpcserver.RPCServer
+}
+
+type Engram struct {
+	Disk *walletapi.Wallet_Disk
+}
+
+type Theme struct {
+	main eTheme
+	alt  eTheme2
+}
+
+type Gnomon struct {
+	Active   int
+	Index    *indexer.Indexer
+	BBolt    *storage.BboltStore
+	Graviton *storage.GravitonStore
+	Path     string
+}
+
+type ProofData struct {
+	Receivers []string
+	Amounts   []uint64
+	Payloads  []string
+}
+
+type Status struct {
+	Canvas     *canvas.Text
+	Message    string
+	Network    *canvas.Text
+	Connection *canvas.Circle
+	Sync       *canvas.Circle
+	Cyberdeck  *canvas.Circle
+}
+
+type Transfers struct {
+	Address    *rpc.Address
+	PaymentID  uint64
+	Amount     uint64
+	Comment    string
+	GasStorage uint64
+	Fees       uint64
+	Pending    []rpc.Transfer
+	TX         *transaction.Transaction
+	TXID       crypto.Hash
+	Proof      string
+	Ringsize   uint64
+	SendAll    bool
+	Size       float32
+	Status     string
+	OfflineTX  bool
+	Filename   string
+}
+
+type Messages struct {
+	Contact string
+	Data    []string
+	Box     *widget.List
+	List    binding.ExternalStringList
+	Height  uint64
+	Message string
+}
+
+type InstallContract struct {
+	TXID string
+}
+
+type Client struct {
+	WS  *websocket.Conn
+	RPC *jrpc2.Client
+}
+
+// Get the Engram settings from the local Graviton tree
+func initSettings() {
+	getTestnet()
+	getMode()
+	getDaemon()
+	getGnomon()
+}
+
+// Go routine to update the latest information from the connected daemon (Online Mode only)
+func StartPulse() {
+	if !walletapi.Connected && engram.Disk != nil {
+		fmt.Printf("[Network] Attempting network connection to: %s\n", walletapi.Daemon_Endpoint)
+		err := walletapi.Connect(session.Daemon)
+		if err != nil {
+			fmt.Printf("[Network] Failed to connect to: %s\n", walletapi.Daemon_Endpoint)
+			walletapi.Connected = false
+			closeWallet()
+			session.Window.SetContent(layoutAlert(1))
+			removeOverlays()
+			return
 		} else {
-			session.Network = true
-			globals.Arguments["--testnet"] = false
+			walletapi.Connected = true
+			engram.Disk.SetOnlineMode()
+			session.BalanceText = canvas.NewText("", colors.Blue)
+			session.StatusText = canvas.NewText("", colors.Blue)
+			status.Connection.FillColor = colors.Gray
+			status.Connection.Refresh()
+			status.Sync.FillColor = colors.Gray
+			status.Sync.Refresh()
+
+			go func() {
+				for walletapi.Connected && engram.Disk != nil {
+					if walletapi.Get_Daemon_Height() < 1 {
+						fmt.Printf("[Network] Attempting network connection to: %s\n", walletapi.Daemon_Endpoint)
+						err := walletapi.Connect(session.Daemon)
+						if err != nil {
+							fmt.Printf("[Network] Failed to connect to: %s\n", walletapi.Daemon_Endpoint)
+							walletapi.Connected = false
+							closeWallet()
+							session.Window.SetContent(layoutAlert(1))
+							removeOverlays()
+							break
+						}
+					}
+
+					if !engram.Disk.IsRegistered() {
+						if !walletapi.Connected {
+							fmt.Printf("[Network] Could not connect to daemon...%d\n", engram.Disk.Get_Daemon_TopoHeight())
+							status.Connection.FillColor = colors.Red
+							status.Connection.Refresh()
+							status.Sync.FillColor = colors.Red
+							status.Sync.Refresh()
+						}
+
+						time.Sleep(time.Second)
+					} else {
+						session.Balance, _ = engram.Disk.Get_Balance()
+						session.BalanceText.Text = globals.FormatMoney(session.Balance)
+						session.BalanceText.Refresh()
+						session.WalletHeight = engram.Disk.Get_Height()
+						session.DaemonHeight = engram.Disk.Get_Daemon_Height()
+						session.StatusText.Text = fmt.Sprintf("%d", session.WalletHeight)
+						session.StatusText.Refresh()
+
+						if session.LastBalance != session.Balance && session.Balance != 0 {
+							go convertBalance()
+						}
+
+						session.LastBalance = session.Balance
+
+						if walletapi.IsDaemonOnline() {
+							status.Connection.FillColor = colors.Green
+							status.Connection.Refresh()
+							if session.DaemonHeight > 0 && session.DaemonHeight-session.WalletHeight < 2 {
+								status.Connection.FillColor = colors.Green
+								status.Connection.Refresh()
+								status.Sync.FillColor = colors.Green
+								status.Sync.Refresh()
+							} else if session.DaemonHeight == 0 {
+								status.Sync.FillColor = colors.Red
+								status.Sync.Refresh()
+							} else {
+								status.Sync.FillColor = colors.Yellow
+								status.Sync.Refresh()
+							}
+						} else {
+							status.Connection.FillColor = colors.Gray
+							status.Connection.Refresh()
+							status.Sync.FillColor = colors.Gray
+							status.Sync.Refresh()
+							status.Cyberdeck.FillColor = colors.Gray
+							status.Cyberdeck.Refresh()
+							fmt.Printf("[Network] Offline › Last Height: " + strconv.FormatUint(session.WalletHeight, 10) + " / " + strconv.FormatUint(session.DaemonHeight, 10) + "\n")
+						}
+
+						time.Sleep(time.Second)
+					}
+				}
+
+				if walletapi.Connected {
+					walletapi.Connected = false
+				}
+			}()
 		}
 	}
 }
 
-func setNetwork(b bool) (err error) {
+// Get Network setting from the local Graviton tree (Ex: Mainnet, Testnet, Simulator)
+func getTestnet() bool {
+	result, err := GetValue("settings", []byte("network"))
+	if err != nil {
+		session.Testnet = false
+		globals.Arguments["--testnet"] = false
+		setTestnet(false)
+		return false
+	} else {
+		if string(result) == "Testnet" {
+			session.Testnet = true
+			globals.Arguments["--testnet"] = true
+			return true
+		} else {
+			session.Testnet = false
+			globals.Arguments["--testnet"] = false
+			return false
+		}
+	}
+}
+
+// Set Network setting to the local Graviton tree (Ex: Mainnet, Testnet, Simulator)
+func setTestnet(b bool) (err error) {
 	s := ""
-	if b {
+	if !b {
 		s = "Mainnet"
 		globals.Arguments["--testnet"] = false
 	} else {
@@ -89,7 +363,7 @@ func setNetwork(b bool) (err error) {
 	return
 }
 
-// Get daemon endpoint setting from Graviton
+// Get daemon endpoint setting from the local Graviton tree
 func getDaemon() (r string) {
 	result, err := GetValue("settings", []byte("endpoint"))
 	if err != nil {
@@ -97,31 +371,25 @@ func getDaemon() (r string) {
 		setDaemon(r)
 		session.Daemon = r
 		globals.Arguments["--daemon-address"] = r
-
 		return
 	}
 
 	r = string(result)
 	session.Daemon = r
 	globals.Arguments["--daemon-address"] = r
-
 	return
 }
 
+// Set the daemon endpoint setting to the local Graviton tree
 func setDaemon(s string) (err error) {
 	StoreValue("settings", []byte("endpoint"), []byte(s))
 	globals.Arguments["--daemon-address"] = s
 	session.Daemon = s
-	if gnomon.Index != nil {
-		gnomon.Index.Endpoint = s
-	}
 	return
 }
 
-// Get mode (online, offline) setting from Graviton
+// Get mode (online, offline) setting from local Graviton tree
 func getMode() {
-	session.Mode = "Online"
-	globals.Arguments["--offline"] = false
 
 	/*
 		if globals.Arguments["--offline"].(bool) == true {
@@ -163,6 +431,7 @@ func getMode() {
 	*/
 }
 
+// Set the default Offline Mode settings to the local Graviton tree
 func setMode(s string) (err error) {
 	err = StoreValue("settings", []byte("mode"), []byte(s))
 	if s == "Offline" {
@@ -173,32 +442,7 @@ func setMode(s string) (err error) {
 	return
 }
 
-// Get connection type (local, remote) setting from Graviton
-func getType() (r string) {
-	result, err := GetValue("settings", []byte("node_type"))
-	if err != nil {
-		r = "Remote"
-		setType(r)
-		session.Type = r
-		return
-	}
-
-	if result == nil {
-		r = "Remote"
-		setType(r)
-		session.Type = r
-	} else {
-		r = string(result)
-		session.Type = r
-	}
-	return
-}
-
-func setType(s string) (err error) {
-	err = StoreValue("settings", []byte("node_type"), []byte(s))
-	return
-}
-
+// Get the default Gnomon settings from local Graviton tree
 func getGnomon() (r string, err error) {
 	v, err := GetValue("settings", []byte("gnomon"))
 	if err != nil {
@@ -222,6 +466,7 @@ func getGnomon() (r string, err error) {
 	return
 }
 
+// Set the default Gnomon settings to the local Graviton tree
 func setGnomon(s string) (err error) {
 	if s == "1" {
 		err = StoreValue("settings", []byte("gnomon"), []byte("1"))
@@ -236,6 +481,7 @@ func setGnomon(s string) (err error) {
 	return
 }
 
+/*
 func getAuthMode() (result string, err error) {
 	r, err := GetValue("settings", []byte("auth_mode"))
 	if err != nil {
@@ -254,7 +500,9 @@ func getAuthMode() (result string, err error) {
 	}
 	return
 }
+*/
 
+// Get the auth_mode settings from local Graviton tree
 func setAuthMode(s string) {
 	if s == "true" {
 		StoreValue("settings", []byte("auth_mode"), []byte("true"))
@@ -263,50 +511,29 @@ func setAuthMode(s string) {
 	}
 }
 
-// Pulse
-func Pulse() {
-
+// Check if a URL exists in the string
+func getTextURL(s string) (result []string) {
+	return xurls.Relaxed().FindAllString(s, -1)
 }
 
-// Set window size
+// Set the window size from provided height and width
 func resizeWindow(width float32, height float32) {
 	s := fyne.NewSize(width, height)
 	session.Window.Resize(s)
 }
 
-func loading() {
-	if session.Domain == "app.main.loading" {
-		time.Sleep(time.Second * 6)
-		session.Domain = "app.main"
-		resizeWindow(MIN_WIDTH, MIN_HEIGHT)
-		session.Window.SetContent(layoutTransition())
-		session.Window.SetContent(layoutMain())
-		return
-	}
-}
-
-// Close the wallet
+// Close the active wallet
 func closeWallet() {
-	if cyberdeck.mode == 1 && cyberdeck.server != nil {
-		cyberdeck.server.RPCServer_Stop()
-		cyberdeck.server = nil
-	}
+	showLoadingOverlay()
 
-	if history.Window != nil {
-		history.Window.Close()
-		history.Window = nil
+	if gnomon.Index != nil {
+		fmt.Printf("[Gnomon] Shutting down indexers...\n")
+		stopGnomon()
 	}
 
 	if engram.Disk != nil {
-		if nr.Mission == 1 || miner.Window != nil {
-			nr.Mission = 0
-			if nr.Connection != nil {
-				nr.Connection.Close()
-			}
-			miner.Window.Close()
-			nr = Netrunner{}
-		}
-
+		fmt.Printf("[Engram] Shutting down wallet services...\n")
+		engram.Disk.SetOfflineMode()
 		engram.Disk.Save_Wallet()
 
 		globals.Exit_In_Progress = true
@@ -314,23 +541,40 @@ func closeWallet() {
 		session.WalletOpen = false
 		session.Domain = "app.main"
 		engram.Disk = nil
-		session.Path = ""
-		session.Name = ""
 		tx = Transfers{}
 
-		resizeWindow(MIN_WIDTH, MIN_HEIGHT)
+		if cyberdeck.server != nil {
+			cyberdeck.server.RPCServer_Stop()
+			cyberdeck.server = nil
+			fmt.Printf("[Engram] Cyberdeck closed.\n")
+		}
+
+		if rpc_client.WS != nil {
+			rpc_client.WS.Close()
+			rpc_client.WS = nil
+			fmt.Printf("[Engram] Websocket client closed.\n")
+		}
+
+		if rpc_client.RPC != nil {
+			rpc_client.RPC.Close()
+			rpc_client.RPC = nil
+			fmt.Printf("[Engram] RPC client closed.\n")
+		}
+
+		session.Path = ""
+		session.Name = ""
+
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutMain())
-		fmt.Printf("[Engram] Wallet closed.\n")
+		removeOverlays()
+		//session.Window.CenterOnScreen()
+		fmt.Printf("[Engram] Wallet saved and closed successfully.\n")
 		return
 	}
 }
 
-func (session *Session) Clear() {
-	session = &Session{}
-}
-
-func create() (a string, s string, err error) {
+// Create a new account and wallet file
+func create() (address string, seed string, err error) {
 	check := findAccount()
 
 	if session.Path == "" {
@@ -356,7 +600,7 @@ func create() (a string, s string, err error) {
 			session.PasswordConfirm = ""
 			session.Error = "Account could not be created."
 		} else {
-			if !session.Network {
+			if session.Testnet {
 				engram.Disk.SetNetwork(false)
 				globals.Arguments["--testnet"] = true
 			} else {
@@ -371,8 +615,8 @@ func create() (a string, s string, err error) {
 			}
 
 			engram.Disk.SetSeedLanguage(languages[session.Language])
-			a = engram.Disk.GetAddress().String()
-			s = engram.Disk.GetSeed()
+			address = engram.Disk.GetAddress().String()
+			seed = engram.Disk.GetSeed()
 			engram.Disk.Close_Encrypted_Wallet()
 			engram.Disk = nil
 			session.Error = "Account successfully created."
@@ -387,33 +631,33 @@ func create() (a string, s string, err error) {
 	return
 }
 
+// The main login routine
 func login() {
 	var err error
 	var temp *walletapi.Wallet_Disk
 
-	initSettings()
+	showLoadingOverlay()
 
 	if engram.Disk == nil {
 		temp, err = walletapi.Open_Encrypted_Wallet(session.Path, session.Password)
 		if err != nil {
-			engram.Disk = nil
 			temp = nil
 			session.Domain = "app.main"
-			session.Error = "Invalid password."
+			session.Error = err.Error()
+			if len(session.Error) > 40 {
+				session.Error = fmt.Sprintf("%s...", session.Error[0:40])
+			}
 			session.Window.Canvas().Content().Refresh()
-
+			removeOverlays()
 			return
-		} else {
-			engram.Disk = temp
-			temp = nil
 		}
+
+		engram.Disk = temp
+		temp = nil
+		session.Password = ""
 	}
 
-	session.Domain = "app.wallet"
-	session.WalletOpen = true
-	session.Password = ""
-
-	if !session.Network {
+	if session.Testnet {
 		engram.Disk.SetNetwork(false)
 		globals.Arguments["--testnet"] = true
 	} else {
@@ -421,137 +665,156 @@ func login() {
 		globals.Arguments["--testnet"] = false
 	}
 
-	setRingSize(engram.Disk, 8)
+	session.WalletOpen = true
+
+	if !session.Offline {
+		walletapi.SetDaemonAddress(session.Daemon)
+		engram.Disk.SetDaemonAddress(session.Daemon)
+
+		if session.TrackRecentBlocks > 0 {
+			if int64(session.LimitMessages) > session.TrackRecentBlocks {
+				session.LimitMessages = uint64(session.TrackRecentBlocks)
+			}
+
+			fmt.Printf("[Engram] Scan tracking enabled, only scanning the last %d blocks...\n", session.TrackRecentBlocks)
+			engram.Disk.SetTrackRecentBlocks(session.TrackRecentBlocks)
+		}
+
+		StartPulse()
+	} else {
+		engram.Disk.SetOfflineMode()
+		status.Connection.FillColor = colors.Gray
+		status.Connection.Refresh()
+		status.Sync.FillColor = colors.Gray
+		status.Sync.Refresh()
+	}
+
+	setRingSize(engram.Disk, 16)
 	session.Verified = false
 
-	if session.Mode == "Offline" {
-		// Offline mode
-		engram.Disk.SetOfflineMode()
-		globals.Arguments["--offline"] = true
-	} else {
+	if !session.Offline {
 		// Online mode
-		globals.Arguments["--offline"] = false
-		status.Connection.FillColor = colors.Yellow
+		status.Connection.FillColor = colors.Green
 		status.Connection.Refresh()
-		engram.Disk.SetDaemonAddress(session.Daemon)
-		engram.Disk.SetOnlineMode()
 		session.Balance = 0
 
-		for !walletapi.IsDaemonOnline() {
-			time.Sleep(time.Second / 2)
+		if !walletapi.Connected {
+			closeWallet()
+			session.Window.SetContent(layoutAlert(1))
+			removeOverlays()
+			return
 		}
 
-		if engram.Disk.IsRegistered() {
-			resizeWindow(MIN_WIDTH, MIN_HEIGHT)
-			session.Window.SetContent(layoutTransition())
-			session.Window.SetContent(layoutDashboard())
-		} else {
-			retry := 0
-			for !engram.Disk.IsRegistered() {
-				if engram.Disk.Get_Registration_TopoHeight() == -1 && retry > 5 {
-					registerAccount()
-					session.Verified = true
-					fmt.Printf("[Registration] Account registration PoW started...\n")
-					fmt.Printf("[Registration] Registering your account. This can take up to 120 minutes (one time). Please wait...\n")
-					break
-				} else {
-					time.Sleep(time.Second)
-					retry++
-				}
+		if engram.Disk.Get_Height() < session.DaemonHeight {
+			time.Sleep(time.Second * 1)
+		}
+
+		for i := 0; i < 10; i++ {
+			reg := engram.Disk.Get_Registration_TopoHeight()
+
+			if reg < 1 {
+				time.Sleep(time.Second * 1)
+			} else {
+				break
+			}
+
+			if i == 9 {
+				registerAccount()
+				removeOverlays()
+				session.Verified = true
+				fmt.Printf("[Registration] Account registration PoW started...\n")
+				fmt.Printf("[Registration] Registering your account. This can take up to 120 minutes (one time). Please wait...\n")
+				return
 			}
 		}
 
-		go func() {
-			timer := 0
+		go startGnomon()
+	}
 
-			for engram.Disk != nil && walletapi.IsDaemonOnline() {
-				engram.Disk.SetOnlineMode()
+	if a.Driver().Device().IsMobile() {
+		session.Domain = "app.wallet"
+		resizeWindow(ui.MaxWidth, ui.MaxHeight)
+	}
 
-				if !engram.Disk.IsRegistered() {
-					if engram.Disk.Get_Daemon_TopoHeight() == 0 {
-						fmt.Printf("[Network] Could not connect to daemon...%d\n", engram.Disk.Get_Daemon_TopoHeight())
-						status.Sync.FillColor = colors.Red
-						status.Sync.Refresh()
-						time.Sleep(time.Second)
-					} else {
-						time.Sleep(time.Second)
-					}
-				} else {
-					newBalance, _ := engram.Disk.Get_Balance()
+	session.Window.SetContent(layoutDashboard())
+	removeOverlays()
 
-					if timer >= 60 {
-						go getPrice()
-					}
+	session.Balance, _ = engram.Disk.Get_Balance()
+	session.BalanceText.Text = globals.FormatMoney(session.Balance)
+	session.BalanceText.Refresh()
 
-					session.WalletHeight = engram.Disk.Get_TopoHeight()
-					session.DaemonHeight = engram.Disk.Get_Daemon_TopoHeight()
+	session.WalletHeight = engram.Disk.Wallet_Memory.Get_Height()
+	session.DaemonHeight = engram.Disk.Get_Daemon_Height()
+	session.StatusText.Text = fmt.Sprintf("%d", session.WalletHeight)
+	session.StatusText.Refresh()
 
-					if session.Mode == "Online" {
-						if session.WalletHeight == session.DaemonHeight && session.DaemonHeight > 0 {
-							if session.Type != "Local" {
-								status.Connection.FillColor = colors.Green
-								status.Connection.Refresh()
-							}
-							status.Sync.FillColor = colors.Green
-							status.Sync.Refresh()
-							fmt.Printf("[Network] Connected to "+session.Daemon+" › Sync Complete (%s / %s)\n", strconv.FormatInt(session.WalletHeight, 10), strconv.FormatInt(session.DaemonHeight, 10))
-						} else if session.DaemonHeight == 0 {
-							status.Sync.FillColor = colors.Red
-							status.Sync.Refresh()
-							fmt.Printf("[Network] Connected to " + session.Daemon + " › Syncing... (" + strconv.FormatInt(session.WalletHeight, 10) + " / " + strconv.FormatInt(session.DaemonHeight, 10) + ")\n")
-						} else {
-							status.Sync.FillColor = colors.Yellow
-							status.Sync.Refresh()
-							fmt.Printf("[Network] Connected to " + session.Daemon + " › Syncing... (" + strconv.FormatInt(session.WalletHeight, 10) + " / " + strconv.FormatInt(session.DaemonHeight, 10) + ")\n")
-						}
-					} else {
-						status.Sync.FillColor = colors.Gray
-						status.Sync.Refresh()
-						status.Cyberdeck.FillColor = colors.Gray
-						status.Cyberdeck.Refresh()
-						fmt.Printf("[Network] Offline › Last Height: " + strconv.FormatInt(session.WalletHeight, 10) + " / " + strconv.FormatInt(session.DaemonHeight, 10) + "\n")
-					}
+	if session.WalletHeight == session.DaemonHeight && !session.Offline {
+		status.Sync.FillColor = colors.Green
+		status.Sync.Refresh()
+	}
 
-					session.Balance = newBalance
-					session.BalanceText.Text = globals.FormatMoney(session.Balance)
-					session.BalanceText.Refresh()
+	address := engram.Disk.GetAddress().String()
+	shard := fmt.Sprintf("%x", sha1.Sum([]byte(address)))
+	session.ID = shard
 
-					address := engram.Disk.GetAddress().String()
-					shard := fmt.Sprintf("%x", sha1.Sum([]byte(address)))
-					session.ID = shard
-
-					if node.Active == 1 {
-						status.Daemon.Res = resourceDaemonOnPng
-						status.Daemon.Refresh()
-					} else {
-						status.Daemon.Res = resourceDaemonOffPng
-						status.Daemon.Refresh()
-					}
-
-					if nr.Mission == 1 {
-						status.Netrunner.Res = resourceMinerOnPng
-						status.Netrunner.Refresh()
-					} else {
-						status.Netrunner.Res = resourceMinerOffPng
-						status.Netrunner.Refresh()
-					}
-
-					time.Sleep(time.Second)
-				}
-			}
-		}()
+	// Set a soft limit on transaction history (TODO: make it user-defined?)
+	if int(engram.Disk.Get_Height()) > 1000000 {
+		session.LimitMessages = uint64(int(engram.Disk.Get_Height()) - 1000000)
 	}
 }
 
+// Remove all overlays
+func removeOverlays() {
+	overlays := session.Window.Canvas().Overlays()
+	list := overlays.List()
+
+	for o := range list {
+		overlays.Remove(list[o])
+	}
+
+	if res.loading != nil {
+		res.loading.Stop()
+		res.loading = nil
+	}
+}
+
+// Add an overlay with the loading animation
+func showLoadingOverlay() {
+	frame := &iframe{}
+
+	if res.loading == nil {
+		res.loading, _ = x.NewAnimatedGifFromResource(resourceLoadingGif)
+		res.loading.SetMinSize(fyne.NewSize(ui.Width*0.45, ui.Width*0.45))
+	}
+
+	rect := canvas.NewRectangle(colors.DarkMatter)
+	rect.SetMinSize(frame.Size())
+
+	background := container.NewStack(
+		rect,
+		container.NewCenter(
+			res.loading,
+		),
+	)
+
+	res.loading.Start()
+
+	layout := container.NewStack(
+		frame,
+		background,
+	)
+
+	overlays := session.Window.Canvas().Overlays()
+	overlays.Add(layout)
+}
+
+// Load embedded resources
 func loadResources() {
 	res.bg = canvas.NewImageFromResource(resourceBgPng)
 	res.bg.FillMode = canvas.ImageFillContain
 
 	res.bg2 = canvas.NewImageFromResource(resourceBg2Png)
 	res.bg2.FillMode = canvas.ImageFillContain
-
-	res.bg3 = canvas.NewImageFromResource(resourceBg3Png)
-	res.bg3.FillMode = canvas.ImageFillContain
 
 	res.icon = canvas.NewImageFromResource(resourceIconPng)
 	res.icon.FillMode = canvas.ImageFillContain
@@ -560,120 +823,22 @@ func loadResources() {
 	res.header.FillMode = canvas.ImageFillContain
 
 	res.load = canvas.NewImageFromResource(resourceLoadPng)
-	res.load.FillMode = canvas.ImageFillContain
+	res.load.FillMode = canvas.ImageFillStretch
 
 	res.dero = canvas.NewImageFromResource(resourceDeroPng)
 	res.dero.FillMode = canvas.ImageFillContain
 
-	res.enter = canvas.NewImageFromResource(resourceEnterPng)
-	res.enter.FillMode = canvas.ImageFillContain
-
 	res.gram = canvas.NewImageFromResource(resourceGramPng)
 	res.gram.FillMode = canvas.ImageFillContain
 
-	res.gram_footer = canvas.NewImageFromResource(resourceGramfooterPng)
-	res.gram_footer.FillMode = canvas.ImageFillContain
+	res.block = canvas.NewImageFromResource(resourceBlockGrayPng)
+	res.block.FillMode = canvas.ImageFillContain
 
-	res.login_footer = canvas.NewImageFromResource(resourceLoginfooterPng)
-	res.login_footer.FillMode = canvas.ImageFillContain
+	res.red_alert = canvas.NewImageFromResource(resourceRedAlertPng)
+	res.red_alert.FillMode = canvas.ImageFillContain
 
-	res.rpc_header = canvas.NewImageFromResource(resourceSubHeaderPng)
-	res.rpc_header.FillMode = canvas.ImageFillContain
-
-	res.nr_header = canvas.NewImageFromResource(resourceSubHeaderPng)
-	res.nr_header.FillMode = canvas.ImageFillContain
-
-	res.rpc_footer = canvas.NewImageFromResource(resourceRpcFooterPng)
-	res.rpc_footer.FillMode = canvas.ImageFillContain
-
-	res.nr_footer = canvas.NewImageFromResource(resourceRpcFooterPng)
-	res.nr_footer.FillMode = canvas.ImageFillContain
-
-	res.nft_header = canvas.NewImageFromResource(resourceSubHeaderPng)
-	res.nft_header.FillMode = canvas.ImageFillContain
-
-	res.nft_footer = canvas.NewImageFromResource(resourceRpcFooterPng)
-	res.nft_footer.FillMode = canvas.ImageFillContain
-
-	res.home_header = canvas.NewImageFromResource(resourceSubHeaderPng)
-	res.home_header.FillMode = canvas.ImageFillContain
-
-	res.home_footer = canvas.NewImageFromResource(resourceRpcFooterPng)
-	res.home_footer.FillMode = canvas.ImageFillContain
-}
-
-func newRtnEntry() *returnEntry {
-	entry := &returnEntry{}
-	entry.ExtendBaseWidget(entry)
-	return entry
-}
-
-func (e *returnEntry) TypedKey(key *fyne.KeyEvent) {
-	switch key.Name {
-	case fyne.KeyReturn:
-		if session.Domain == "app.main" {
-			login()
-		} else if session.Domain == "app.create" {
-			create()
-		}
-	default:
-		e.Entry.TypedKey(key)
-	}
-}
-
-func (e *returnEntry) onReturn() {
-	login()
-}
-
-func newTapRect() *tapRect {
-	rect := &tapRect{}
-	rect.Rectangle.FillColor = colors.DarkMatter
-	return rect
-}
-
-/*
-func (e *tapRect) CreateRenderer() fyne.WidgetRenderer {
-	r := &tapRectRenderer{
-		e,
-	}
-	return r
-}
-func (r *tapRectRenderer) Destroy()                    {}
-func (r *tapRectRenderer) Layout(size fyne.Size) {
-
-}
-func (r *tapRectRenderer) MinSize() fyne.Size {
-	return r.e.Content.MinSize()
-}
-*/
-
-func (e *tapRect) Refresh() {
-	e.Rectangle.Refresh()
-}
-
-func (e *tapRect) SetFillColor(c color.Color) {
-	e.Rectangle.FillColor = c
-	e.Rectangle.Refresh()
-}
-
-func (e *tapRect) Tapped(*fyne.PointEvent) {
-	fmt.Printf("tapped")
-	/*
-		switch key.Name {
-		case fyne.KeyReturn:
-			if session.Domain == "app.main" {
-				login()
-			} else if session.Domain == "app.create" {
-				create()
-			}
-		default:
-			e.Entry.TypedKey(key)
-		}
-	*/
-}
-
-func (e *tapRect) TappedSecondary(*fyne.PointEvent) {
-	fmt.Printf("tapped secondary")
+	res.green_alert = canvas.NewImageFromResource(resourceGreenAlertPng)
+	res.green_alert.FillMode = canvas.ImageFillContain
 }
 
 // Reset UI resources
@@ -704,14 +869,61 @@ func get_balance_SCID(s string) string {
 	return b
 }
 
-// Display seed to the user in preferred language
+// Check the transaction ring members to see if the provided address exists
+func ring_member_exists(txid string, address string) bool {
+	if engram.Disk == nil || session.Offline {
+		return false
+	}
+
+	var err error
+	var tx_params rpc.GetTransaction_Params
+	var tx_result rpc.GetTransaction_Result
+
+	tx_params.Tx_Hashes = append(tx_params.Tx_Hashes, txid)
+
+	rpc_client.WS, _, err = websocket.DefaultDialer.Dial("ws://"+session.Daemon+"/ws", nil)
+
+	input_output := rwc.New(rpc_client.WS)
+	rpc_client.RPC = jrpc2.NewClient(channel.RawJSON(input_output, input_output), nil)
+
+	if err = rpc_client.RPC.CallResult(context.Background(), "DERO.GetTransaction", tx_params, &tx_result); err != nil {
+		fmt.Printf("[Messages] Checking ring members for TXID: %s (Failed: %s)\n", txid, err)
+		return false
+	}
+
+	rpc_client.WS.Close()
+	rpc_client.RPC.Close()
+
+	if tx_result.Status != "OK" {
+		fmt.Printf("[Messages] Checking ring members for TXID: %s (Failed: %s)\n", txid, tx_result.Status)
+		return false
+	}
+
+	if len(tx_result.Txs_as_hex[0]) < 50 {
+		return false
+	}
+
+	ring := tx_result.Txs[0].Ring
+
+	for i := 0; i < len(ring[0]); i++ {
+		if ring[0][i] == address {
+			fmt.Printf("[Messages] Checking ring members for TXID: %s (Verified)\n", txid)
+			return true
+		}
+	}
+
+	fmt.Printf("[Messages] Checking ring members for TXID: %s (Unverified - Skipping)\n", txid)
+	return false
+}
+
+// Get the recovery words (seed words) for an account
 func display_seed() string {
 	seed := engram.Disk.GetSeed()
 
 	return seed
 }
 
-// Display keys
+// Get the account public/private keys
 func display_spend_key() (secret string, public string) {
 
 	keys := engram.Disk.Get_Keys()
@@ -741,23 +953,150 @@ func openURL(url string, a *App) {
 
 }
 
-func checkSeedWord(w string) bool {
-	_, _, _, check := mnemonics.Find_indices([]string{w})
-	if check {
-		return true
+// Validate if the provided word is a seed word
+func checkSeedWord(w string) (check bool) {
+	split := strings.Split(w, " ")
+
+	if len(split) > 1 {
+		return
 	}
-	return false
+	_, _, _, check = mnemonics.Find_indices([]string{w})
+
+	return
 }
 
-func addTransfer(args rpc.Arguments) {
-	tx.Pending = append(tx.Pending, rpc.Transfer{Amount: tx.Amount, Destination: tx.Address.String(), Payload_RPC: args})
+// Add a DERO transfer to the batch
+func addTransfer() error {
+	var arguments = rpc.Arguments{}
+	var err error
+
+	fmt.Printf("[Send] Starting tx...\n")
+	if tx.Address.IsIntegratedAddress() {
+		if tx.Address.Arguments.Validate_Arguments() != nil {
+			fmt.Printf("[Service] Integrated Address arguments could not be validated")
+			err = errors.New("Integrated Address arguments could not be validated")
+			return err
+		}
+
+		fmt.Printf("[Send] Not Integrated..\n")
+		if !tx.Address.Arguments.Has(rpc.RPC_DESTINATION_PORT, rpc.DataUint64) {
+			fmt.Printf("[Service] Integrated Address does not contain destination port")
+			err = errors.New("Integrated Address does not contain destination port")
+			return err
+		}
+
+		arguments = append(arguments, rpc.Argument{Name: rpc.RPC_DESTINATION_PORT, DataType: rpc.DataUint64, Value: tx.Address.Arguments.Value(rpc.RPC_DESTINATION_PORT, rpc.DataUint64).(uint64)})
+		fmt.Printf("[Send] Added arguments..\n")
+
+		if tx.Address.Arguments.Has(rpc.RPC_EXPIRY, rpc.DataTime) {
+
+			if tx.Address.Arguments.Value(rpc.RPC_EXPIRY, rpc.DataTime).(time.Time).Before(time.Now().UTC()) {
+				fmt.Printf("[Service] This address has expired.", "expiry time", tx.Address.Arguments.Value(rpc.RPC_EXPIRY, rpc.DataTime))
+				err = errors.New("This address has expired")
+				return err
+			} else {
+				fmt.Printf("[Service] This address will expire ", "expiry time", tx.Address.Arguments.Value(rpc.RPC_EXPIRY, rpc.DataTime))
+				err = errors.New("This address has expired")
+				return err
+			}
+		}
+
+		fmt.Printf("[Service] Destination port is integrated in address.", "dst port", tx.Address.Arguments.Value(rpc.RPC_DESTINATION_PORT, rpc.DataUint64).(uint64))
+
+		if tx.Address.Arguments.Has(rpc.RPC_COMMENT, rpc.DataString) {
+			fmt.Printf("[Service] Integrated Message", "comment", tx.Address.Arguments.Value(rpc.RPC_COMMENT, rpc.DataString))
+			arguments = append(arguments, rpc.Argument{rpc.RPC_COMMENT, rpc.DataString, tx.Address.Arguments.Value(rpc.RPC_COMMENT, rpc.DataString)})
+		}
+	}
+
+	fmt.Printf("[Send] Checking arguments..\n")
+
+	for _, arg := range tx.Address.Arguments {
+		if !(arg.Name == rpc.RPC_COMMENT || arg.Name == rpc.RPC_EXPIRY || arg.Name == rpc.RPC_DESTINATION_PORT || arg.Name == rpc.RPC_SOURCE_PORT || arg.Name == rpc.RPC_VALUE_TRANSFER || arg.Name == rpc.RPC_NEEDS_REPLYBACK_ADDRESS) {
+			switch arg.DataType {
+			case rpc.DataString:
+				arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
+			case rpc.DataInt64:
+				arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
+			case rpc.DataUint64:
+				arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
+			case rpc.DataFloat64:
+				arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
+			case rpc.DataTime:
+				fmt.Errorf("[Service] Time currently not supported.\n")
+			}
+		}
+	}
+
+	fmt.Printf("[Send] Checking Amount..\n")
+
+	if tx.Address.Arguments.Has(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64) {
+		fmt.Printf("[Service] Transaction amount: %s\n", globals.FormatMoney(tx.Address.Arguments.Value(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64).(uint64)))
+		tx.Amount = tx.Address.Arguments.Value(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64).(uint64)
+	} else {
+		balance, _ := engram.Disk.Get_Balance()
+		fmt.Printf("[Send] Balance: %d\n", balance)
+		fmt.Printf("[Send] Amount: %d\n", tx.Amount)
+
+		if tx.Amount > balance {
+			fmt.Printf("[Send] Error: Insufficient funds")
+			err = errors.New("Insufficient funds")
+			return err
+		} else if tx.Amount == balance {
+			tx.SendAll = true
+		} else {
+			tx.SendAll = false
+		}
+	}
+
+	fmt.Printf("[Send] Checking services..\n")
+
+	if tx.Address.Arguments.Has(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataUint64) {
+		fmt.Printf("[Service] Reply Address required, sending: %s\n", engram.Disk.GetAddress().String())
+		arguments = append(arguments, rpc.Argument{Name: rpc.RPC_REPLYBACK_ADDRESS, DataType: rpc.DataAddress, Value: engram.Disk.GetAddress()})
+	}
+
+	fmt.Printf("[Send] Checking payment ID/destination port..\n")
+
+	if len(arguments) == 0 {
+		arguments = append(arguments, rpc.Argument{Name: rpc.RPC_DESTINATION_PORT, DataType: rpc.DataUint64, Value: tx.PaymentID})
+		arguments = append(arguments, rpc.Argument{Name: rpc.RPC_COMMENT, DataType: rpc.DataString, Value: tx.Comment})
+	}
+
+	fmt.Printf("[Send] Checking Pack..\n")
+
+	if _, err := arguments.CheckPack(transaction.PAYLOAD0_LIMIT); err != nil {
+		fmt.Printf("[Send] Arguments packing err: %s\n", err)
+		return err
+	}
+
+	if tx.Ringsize == 0 {
+		tx.Ringsize = 2
+	} else if tx.Ringsize > 128 {
+		tx.Ringsize = 128
+	} else if !crypto.IsPowerOf2(int(tx.Ringsize)) {
+		tx.Ringsize = 2
+		fmt.Printf("[Send] Error: Invalid ringsize - New ringsize = %d\n", tx.Ringsize)
+		err = errors.New("Invalid ringsize")
+		return err
+	}
+
+	tx.Status = "Unsent"
+
+	fmt.Printf("[Send] Ringsize: %d\n", tx.Ringsize)
+
+	tx.Pending = append(tx.Pending, rpc.Transfer{Amount: tx.Amount, Destination: tx.Address.String(), Payload_RPC: arguments})
 	fmt.Printf("[Send] Added transfer to the pending list.\n")
 
-	session.Window.SetContent(layoutTransition())
-	session.Window.SetContent(layoutTransfers())
+	return nil
 }
 
-func sendTransfers() (err error) {
+// Send all batched transfers (TODO: export offline transactions to file in Offline mode)
+func sendTransfers() (txid crypto.Hash, err error) {
+	if session.Offline {
+		return
+	}
+
 	tx.TX, err = engram.Disk.TransferPayload0(tx.Pending, tx.Ringsize, false, rpc.Arguments{}, 0, false)
 
 	if err != nil {
@@ -775,30 +1114,32 @@ func sendTransfers() (err error) {
 
 	fmt.Printf("[Send] Dispatched transaction: %s\n", tx.TXID)
 
+	txid = tx.TX.GetHash()
+
 	tx = Transfers{}
 
 	return
 }
 
-// Routine for account registration
+// Go Routine for account registration
 func registerAccount() {
 	session.Domain = "app.register"
 	if engram.Disk == nil {
-		resizeWindow(MIN_WIDTH, MIN_HEIGHT)
+		resizeWindow(ui.MaxWidth, ui.MaxHeight)
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutMain())
 		session.Domain = "app.main"
 		return
 	}
 
-	btnClose := widget.NewButton("Cancel", nil)
-	btnClose.OnTapped = func() {
+	link := widget.NewHyperlinkWithStyle("Cancel", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	link.OnTapped = func() {
 		session.Gif.Stop()
 		session.Gif = nil
 		closeWallet()
 	}
 
-	title := canvas.NewText("R E G I S T R A T I O N", colors.Gray)
+	title := canvas.NewText("R E G I S T R A T I O N", colors.Green)
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.TextSize = 16
 
@@ -812,17 +1153,18 @@ func registerAccount() {
 	sub.Alignment = fyne.TextAlignCenter
 	sub.TextStyle = fyne.TextStyle{Bold: true}
 
-	resizeWindow(MIN_WIDTH, MIN_HEIGHT)
+	resizeWindow(ui.MaxWidth, ui.MaxHeight)
 	session.Window.SetContent(layoutTransition())
-	session.Window.SetContent(layoutWaiting(title, heading, sub, btnClose))
+	session.Window.SetContent(layoutWaiting(title, heading, sub, link))
 
+	// Registration PoW
 	go func() {
 		var reg_tx *transaction.Transaction
 		successful_regs := make(chan *transaction.Transaction)
-
 		counter := 0
+		session.RegHashes = 0
 
-		for i := 0; i < runtime.GOMAXPROCS(0)-1; i++ {
+		for i := 0; i < runtime.GOMAXPROCS(0)/2; i++ {
 			go func() {
 				for counter == 0 {
 					if engram.Disk == nil {
@@ -833,6 +1175,7 @@ func registerAccount() {
 
 					lreg_tx := engram.Disk.GetRegistrationTX()
 					hash := lreg_tx.GetHash()
+					session.RegHashes++
 
 					if hash[0] == 0 && hash[1] == 0 && hash[2] == 0 {
 						successful_regs <- lreg_tx
@@ -840,12 +1183,13 @@ func registerAccount() {
 						break
 					}
 				}
-
 			}()
 		}
 
 		if engram.Disk == nil {
-			resizeWindow(MIN_WIDTH, MIN_HEIGHT)
+			session.Gif.Stop()
+			session.Gif = nil
+			resizeWindow(ui.MaxWidth, ui.MaxHeight)
 			session.Window.SetContent(layoutTransition())
 			session.Window.SetContent(layoutMain())
 			session.Domain = "app.main"
@@ -857,8 +1201,10 @@ func registerAccount() {
 		fmt.Printf("[Registration] Registration TXID: %s\n", reg_tx.GetHash())
 		err := engram.Disk.SendTransaction(reg_tx)
 		if err != nil {
+			session.Gif.Stop()
+			session.Gif = nil
 			fmt.Printf("[Registration] Error: %s\n", err)
-			resizeWindow(MIN_WIDTH, MIN_HEIGHT)
+			resizeWindow(ui.MaxWidth, ui.MaxHeight)
 			session.Window.SetContent(layoutTransition())
 			session.Window.SetContent(layoutMain())
 			session.Domain = "app.main"
@@ -866,10 +1212,10 @@ func registerAccount() {
 			session.Gif.Stop()
 			session.Gif = nil
 			fmt.Printf("[Registration] Registration transaction dispatched successfully.\n")
-			resizeWindow(MIN_WIDTH, MIN_HEIGHT)
+			resizeWindow(ui.MaxWidth, ui.MaxHeight)
+			session.Domain = "app.wallet"
 			session.Window.SetContent(layoutTransition())
 			session.Window.SetContent(layoutDashboard())
-			session.Domain = "app.wallet"
 		}
 	}()
 
@@ -886,10 +1232,10 @@ func setRingSize(wallet *walletapi.Wallet_Disk, s int) bool {
 	// Minimum ring size is 2, only accept powers of 2.
 	if s < 2 {
 		wallet.SetRingSize(2)
-		fmt.Printf("[Engram] New transaction ring size: 2\n")
+		fmt.Printf("[Engram] Set minimum ring size: 2\n")
 	} else {
 		wallet.SetRingSize(s)
-		fmt.Printf("[Engram] New transaction ring size: %d\n", s)
+		fmt.Printf("[Engram] Set default ring size: %d\n", s)
 	}
 
 	return true
@@ -908,53 +1254,74 @@ func getUsername() (result string, err error) {
 	return
 }
 
-func checkUsername(s string) (result bool, address string, err error) {
-	payload := DaemonRPC{
-		Jsonrpc: "2.0",
-		ID:      "1",
-		Method:  "DERO.NameToAddress",
+// Check if a username exists, return the registered address if so
+func checkUsername(s string, h int64) (valid bool, address string, err error) {
+	if session.Offline {
+		valid = false
+		return
+	}
+	var params rpc.NameToAddress_Params
+	var response *jrpc2.Response
+	var result rpc.NameToAddress_Result
+
+	rpc_client.WS, _, err = websocket.DefaultDialer.Dial("ws://"+session.Daemon+"/ws", nil)
+
+	input_output := rwc.New(rpc_client.WS)
+	rpc_client.RPC = jrpc2.NewClient(channel.RawJSON(input_output, input_output), nil)
+
+	if rpc_client.RPC != nil {
+		params.Name = s
+		params.TopoHeight = -1
+
+		valid = false
+		address = ""
+		response, err = rpc_client.RPC.Call(context.Background(), "DERO.NameToAddress", params)
+
+		rpc_client.WS.Close()
+		rpc_client.RPC.Close()
+
+		if err != nil {
+			return
+		}
+
+		err = response.UnmarshalResult(&result)
+		if err != nil {
+			return
+		}
+
+		if result.Status != "OK" {
+			err = errors.New("Username does not exist")
+			return
+		}
+
+		valid = true
+		address = result.Address
 	}
 
-	payload.Params.Name = s
+	return
+}
 
-	j, err := json.Marshal(payload)
+// Get the transaction fees to be paid
+func getGasEstimate(gp rpc.GasEstimate_Params) (gas uint64, err error) {
+	var result rpc.GasEstimate_Result
+
+	rpc_client.WS, _, err = websocket.DefaultDialer.Dial("ws://"+session.Daemon+"/ws", nil)
 	if err != nil {
 		return
 	}
 
-	body := bytes.NewReader(j)
+	input_output := rwc.New(rpc_client.WS)
+	rpc_client.RPC = jrpc2.NewClient(channel.RawJSON(input_output, input_output), nil)
 
-	// Connect to daemon
-	url := "http://" + session.Daemon + "/json_rpc"
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	var resData map[string]interface{}
-	responseData, err := ioutil.ReadAll(resp.Body)
-
-	err = json.Unmarshal(responseData, &resData)
-	if err != nil {
+	if err = rpc_client.RPC.CallResult(context.Background(), "DERO.GetGasEstimate", gp, &result); err != nil {
 		return
 	}
 
-	if resData["result"] == nil {
-		err = errors.New("Username is not registered to this account")
+	if result.Status != "OK" {
 		return
 	}
 
-	node := resData["result"].(map[string]interface{})
-	address = node["address"].(string)
-
-	result = true
+	gas = result.GasStorage
 
 	return
 }
@@ -962,27 +1329,26 @@ func checkUsername(s string) (result bool, address string, err error) {
 // Register a new DERO username
 func registerUsername(s string) (err error) {
 	// Check first if the name is taken
-	check, _, err := checkUsername(s)
-	if err == nil || check {
+	valid, _, _ := checkUsername(s, -1)
+	if valid {
 		fmt.Printf("[username] error: skipping registration - username exists.\n")
 		err = errors.New("Username already exists")
 		return
 	}
 
-	var args = rpc.Arguments{}
-	args = append(args, rpc.Argument{string("entrypoint"), rpc.DataString, string("Register")})
+	var scid crypto.Hash
+	scid = crypto.HashHexToHash("0000000000000000000000000000000000000000000000000000000000000001")
 
-	var cp = rpc.SC_Invoke_Params{
-		SC_ID:            string("0000000000000000000000000000000000000000000000000000000000000001"), // string    `json:"scid"`
-		SC_RPC:           args,                                                                       // arguments `json:"sc_rpc"`
-		SC_DERO_Deposit:  uint64(0),                                                                  // uint64    `json:"sc_dero_deposit"`
-		SC_TOKEN_Deposit: uint64(0),                                                                  // uint64    `json:"sc_token_deposit"`
-	}
+	var args = rpc.Arguments{}
+	args = append(args, rpc.Argument{Name: "entrypoint", DataType: "S", Value: "Register"})
+	args = append(args, rpc.Argument{Name: "SC_ID", DataType: "H", Value: scid})
+	args = append(args, rpc.Argument{Name: "SC_ACTION", DataType: "U", Value: uint64(rpc.SC_CALL)})
+	args = append(args, rpc.Argument{Name: "name", DataType: "S", Value: s})
 
 	var p rpc.Transfer_Params
 	var dest string
 
-	if session.Network {
+	if !session.Testnet {
 		dest = "dero1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgny8270"
 	} else {
 		dest = "deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p"
@@ -993,15 +1359,15 @@ func registerUsername(s string) (err error) {
 		Burn:        0,
 	})
 
-	p.SC_RPC = cp.SC_RPC
-	p.SC_ID = cp.SC_ID
+	gp := rpc.GasEstimate_Params{SC_RPC: args, Ringsize: 2, Signer: engram.Disk.GetAddress().String(), Transfers: p.Transfers}
 
-	cp.SC_RPC = append(cp.SC_RPC, rpc.Argument{rpc.SCACTION, rpc.DataUint64, uint64(0)})
-	cp.SC_RPC = append(cp.SC_RPC, rpc.Argument{rpc.SCID, rpc.DataHash, crypto.HashHexToHash(cp.SC_ID)})
-	cp.SC_RPC = append(cp.SC_RPC, rpc.Argument{string("name"), rpc.DataString, string(s)})
+	storage, err := getGasEstimate(gp)
+	if err != nil {
+		fmt.Printf("[Username] Error: %s\n", err)
+		return
+	}
 
-	var tx *transaction.Transaction
-	tx, err = engram.Disk.TransferPayload0(p.Transfers, 2, false, cp.SC_RPC, 0, false)
+	tx, err := engram.Disk.TransferPayload0(p.Transfers, 2, false, args, storage, false)
 	if err != nil {
 		fmt.Printf("[Username] Error: %s\n", err)
 		return
@@ -1013,32 +1379,13 @@ func registerUsername(s string) (err error) {
 		return
 	}
 
-	go func() {
-		c := 0
-		for i := 0; i < 61; i++ {
-			_, _, err = checkUsername(s)
-			if err == nil {
-				fmt.Printf("[Username] Successfully registered username: %s\n", s)
-				fmt.Printf("[Username] Username Registration TXID:  %s\n", tx.GetHash().String())
-				break
-			} else {
-				c++
-				time.Sleep(1 * time.Second)
-			}
-		}
-
-		_ = tx
-		session.NewUser = ""
-
-		if c >= 60 {
-			fmt.Printf("[Username] error: timed out when registering username: %s\n", s)
-		}
-	}()
+	fmt.Printf("[Username] Username Registration TXID:  %s\n", tx.GetHash().String())
 
 	return
 }
 
-func sendMessage(m string, s string, r string) (err error) {
+// Check to make sure the message transaction meets criteria
+func checkMessagePack(m string, s string, r string) (err error) {
 	if m == "" {
 		return
 	}
@@ -1065,14 +1412,10 @@ func sendMessage(m string, s string, r string) (err error) {
 		//logger.Error(err, "Err parsing amount")
 		return
 	}
-	//var transfer []rpc.Transfer
-
-	//integrated := engram.Disk.GetRandomIAddress8()
 
 	var arguments = rpc.Arguments{
 		{rpc.RPC_DESTINATION_PORT, rpc.DataUint64, uint64(1337)},
 		{rpc.RPC_VALUE_TRANSFER, rpc.DataUint64, amount},
-		// { rpc.RPC_EXPIRY , rpc.DataTime, time.Now().Add(time.Hour).UTC()},
 		{rpc.RPC_COMMENT, rpc.DataString, m},
 		{rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString, s},
 	}
@@ -1130,7 +1473,7 @@ func sendMessage(m string, s string, r string) (err error) {
 		//logger.Info("Transaction", "Value", globals.FormatMoney(a.Arguments.Value(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64).(uint64)))
 		amount = a.Arguments.Value(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64).(uint64)
 	} else {
-		amount, err = globals.ParseAmount("0.00002")
+		amount, err = globals.ParseAmount("0.00001")
 		if err != nil {
 			//logger.Error(err, "Err parsing amount")
 			return
@@ -1152,27 +1495,139 @@ func sendMessage(m string, s string, r string) (err error) {
 		return
 	}
 
-	//transfer = append(transfer, rpc.Transfer{Amount: uint64(0), Destination: a.String(), Payload_RPC: arguments})
+	return
+}
 
-	tx, err := engram.Disk.TransferPayload0([]rpc.Transfer{rpc.Transfer{Amount: amount, Destination: a.String(), Payload_RPC: arguments}}, 0, false, rpc.Arguments{}, 0, false)
-	//tx, err := engram.Disk.TransferPayload0(transfer, uint64(2), false, rpc.Arguments{}, uint64(0), false)
+// Send a private message to another account
+func sendMessage(m string, s string, r string) (txid crypto.Hash, err error) {
+	if m == "" {
+		return
+	}
+
+	mapAddress := ""
+	a, err := globals.ParseValidateAddress(r)
 	if err != nil {
+		mapAddress, err = engram.Disk.NameToAddress(r)
+		if err != nil {
+			return
+		}
+		a, err = globals.ParseValidateAddress(mapAddress)
+		if err != nil {
+			return
+		}
+	}
+
+	if s == "" {
+		s = engram.Disk.GetAddress().String()
+	}
+
+	amount, err := globals.ParseAmount("0.00001")
+	if err != nil {
+		//logger.Error(err, "Err parsing amount")
+		return
+	}
+
+	var arguments = rpc.Arguments{
+		{rpc.RPC_DESTINATION_PORT, rpc.DataUint64, uint64(1337)},
+		{rpc.RPC_VALUE_TRANSFER, rpc.DataUint64, amount},
+		{rpc.RPC_EXPIRY, rpc.DataTime, time.Now().Add(time.Hour).UTC()},
+		{rpc.RPC_COMMENT, rpc.DataString, m},
+		{rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString, s},
+	}
+
+	if a.IsIntegratedAddress() {
+		if a.Arguments.Validate_Arguments() != nil {
+			return
+		}
+
+		if !a.Arguments.Has(rpc.RPC_DESTINATION_PORT, rpc.DataUint64) {
+			fmt.Printf("[Send Message] Integrated Address does not contain destination port.\n")
+			return
+		}
+
+		arguments = append(arguments, rpc.Argument{Name: rpc.RPC_DESTINATION_PORT, DataType: rpc.DataUint64, Value: a.Arguments.Value(rpc.RPC_DESTINATION_PORT, rpc.DataUint64).(uint64)})
+
+		if a.Arguments.Has(rpc.RPC_EXPIRY, rpc.DataTime) {
+			if a.Arguments.Value(rpc.RPC_EXPIRY, rpc.DataTime).(time.Time).Before(time.Now().UTC()) {
+				fmt.Printf("[Send Message] This address has expired on %x\n", a.Arguments.Value(rpc.RPC_EXPIRY, rpc.DataTime))
+				return
+			} else {
+				fmt.Printf("[Send Message] This address will expire on %x\n", a.Arguments.Value(rpc.RPC_EXPIRY, rpc.DataTime))
+			}
+		}
+
+		fmt.Printf("[Send Message] Destination port is integrated in address. %x\n", a.Arguments.Value(rpc.RPC_DESTINATION_PORT, rpc.DataUint64).(uint64))
+
+		if a.Arguments.Has(rpc.RPC_COMMENT, rpc.DataString) {
+			fmt.Printf("[Send Message] Integrated Message: %s\n", a.Arguments.Value(rpc.RPC_COMMENT, rpc.DataString))
+			arguments = append(arguments, rpc.Argument{rpc.RPC_COMMENT, rpc.DataString, a.Arguments.Value(rpc.RPC_COMMENT, rpc.DataString)})
+		}
+	}
+
+	for _, arg := range arguments {
+		if !(arg.Name == rpc.RPC_COMMENT || arg.Name == rpc.RPC_EXPIRY || arg.Name == rpc.RPC_DESTINATION_PORT || arg.Name == rpc.RPC_SOURCE_PORT || arg.Name == rpc.RPC_VALUE_TRANSFER || arg.Name == rpc.RPC_NEEDS_REPLYBACK_ADDRESS) {
+			switch arg.DataType {
+			case rpc.DataString:
+				arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
+			case rpc.DataInt64:
+				arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
+			case rpc.DataUint64:
+				arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
+			case rpc.DataFloat64:
+				arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
+			case rpc.DataTime:
+				fmt.Printf("[Service] Time currently not supported.\n")
+			}
+		}
+	}
+
+	if a.Arguments.Has(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64) {
+		amount = a.Arguments.Value(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64).(uint64)
+	} else {
+		amount, err = globals.ParseAmount("0.00001")
+		if err != nil {
+			fmt.Printf("[Send Message] Error: %s\n", err)
+			return
+		}
+	}
+
+	if a.Arguments.Has(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString) {
+		arguments = append(arguments, rpc.Argument{Name: rpc.RPC_NEEDS_REPLYBACK_ADDRESS, DataType: rpc.DataString, Value: s})
+	}
+
+	if len(arguments) == 0 {
+		arguments = append(arguments, rpc.Argument{Name: rpc.RPC_DESTINATION_PORT, DataType: rpc.DataUint64, Value: uint64(1337)})
+		arguments = append(arguments, rpc.Argument{Name: rpc.RPC_COMMENT, DataType: rpc.DataString, Value: m})
+	}
+
+	if _, err = arguments.CheckPack(transaction.PAYLOAD0_LIMIT); err != nil {
+		fmt.Printf("[Message] Arguments packing err: %s\n", err)
+		return
+	}
+
+	fees := ((uint64(engram.Disk.GetRingSize()) + 1) * config.FEE_PER_KB) / 4
+
+	fmt.Printf("[Message] Calculated Fees: %d\n", fees)
+
+	tx, err := engram.Disk.TransferPayload0([]rpc.Transfer{rpc.Transfer{Amount: amount, Destination: a.String(), Payload_RPC: arguments}}, 0, false, rpc.Arguments{}, fees, false)
+	if err != nil {
+		fmt.Printf("[Message] Error while building transaction: %s\n", err)
 		return
 	}
 
 	if err = engram.Disk.SendTransaction(tx); err != nil {
-		fmt.Printf("[Send] Error while dispatching transaction: %s\n", err)
+		fmt.Printf("[Message] Error while dispatching transaction: %s\n", err)
 		return
 	}
 
-	//fees := tx.Fees()
-	txid := tx.GetHash()
+	txid = tx.GetHash()
 
-	fmt.Printf("[Send] Dispatched transaction: %s\n", txid)
+	fmt.Printf("[Message] Dispatched transaction: %s\n", txid)
 
 	return
 }
 
+// Get a list of message transactions from an address
 func getMessagesFromUser(s string, h uint64) (result []rpc.Entry) {
 	var zeroscid crypto.Hash
 	if s == "" {
@@ -1184,6 +1639,7 @@ func getMessagesFromUser(s string, h uint64) (result []rpc.Entry) {
 	for m := range messages {
 		var username bool
 		var username2 bool
+
 		txid := messages[m].TXID
 		tx := engram.Disk.Get_Payments_TXID(txid)
 
@@ -1196,12 +1652,22 @@ func getMessagesFromUser(s string, h uint64) (result []rpc.Entry) {
 
 		if tx.Incoming {
 			if tx.Payload_RPC.HasValue(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString) {
-				check2, err := engram.Disk.NameToAddress(tx.Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string))
+				height := int64(tx.Height)
+				_, check2, err := checkUsername(tx.Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string), height)
 				if err != nil {
 					username2 = false
+					addr, err := globals.ParseValidateAddress(tx.Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string))
+					if err != nil {
+						check2 = ""
+					} else {
+						check2 = addr.String()
+					}
 				} else {
 					username2 = true
 				}
+
+				// Check for spoofing
+				//if ring_member_exists(txid, check2) {
 
 				if username && username2 {
 					if check == check2 {
@@ -1216,6 +1682,7 @@ func getMessagesFromUser(s string, h uint64) (result []rpc.Entry) {
 				} else if s == check2 {
 					result = append(result, messages[m])
 				}
+				//}
 			}
 		} else {
 			addr, err := engram.Disk.NameToAddress(s)
@@ -1234,6 +1701,7 @@ func getMessagesFromUser(s string, h uint64) (result []rpc.Entry) {
 	return
 }
 
+// Get a list of all message transactions and sort them by address
 func getMessages(h uint64) (result []string) {
 	var zeroscid crypto.Hash
 	messages := engram.Disk.Get_Payments_DestinationPort(zeroscid, uint64(1337), h)
@@ -1244,73 +1712,104 @@ func getMessages(h uint64) (result []string) {
 				if messages[m].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string) == "" {
 
 				} else {
-					sender, err := engram.Disk.NameToAddress(messages[m].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string))
-					if err != nil {
+					height := int64(messages[m].Height)
+					valid, sender, _ := checkUsername(messages[m].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string), height)
+					if !valid {
 						addr, err := globals.ParseValidateAddress(messages[m].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string))
 						if err != nil {
 
 						} else {
 							sender = addr.String()
-							c := 0
 							for r := range result {
-								if strings.Contains(result[r], sender+":") {
-									c += 1
+								if r > -1 && r < len(result) {
+									if strings.Contains(result[r], sender+"~~~") {
+										copy(result[r:], result[r+1:])
+										result[len(result)-1] = ""
+										result = result[:len(result)-1]
+									}
 								}
 							}
-							if c == 0 {
-								result = append(result, sender+":")
-							}
+							result = append(result, sender+"~~~")
 						}
 					} else {
-						c := 0
+						// Check for spoofing
+						//if ring_member_exists(messages[m].TXID, sender) {
 						for r := range result {
-							if strings.Contains(result[r], sender+":"+messages[m].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string)) {
-								c += 1
+							if r > -1 && r < len(result) {
+								//if strings.Contains(result[r], sender+"```"+messages[m].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string)) {
+								if strings.Contains(result[r], sender+"~~~") {
+									copy(result[r:], result[r+1:])
+									result[len(result)-1] = ""
+									result = result[:len(result)-1]
+								}
 							}
 						}
-						if c == 0 {
-							result = append(result, sender+":"+messages[m].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string))
-						}
+						result = append(result, sender+"~~~"+messages[m].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string))
+						//} else {
+						// TODO: Add spoofing address to the ban list?
+						//}
 					}
 				}
 			}
 		} else {
 			if messages[m].Payload_RPC.HasValue(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString) {
-				c := 0
+				uname := ""
 				for r := range result {
-					if strings.Contains(result[r], messages[m].Destination) {
-						c += 1
+					if r > -1 && r < len(result) {
+						if strings.Contains(result[r], messages[m].Destination+"~~~") {
+							split := strings.Split(result[r], "~~~")
+							uname = split[1]
+							copy(result[r:], result[r+1:])
+							result[len(result)-1] = ""
+							result = result[:len(result)-1]
+						}
 					}
 				}
-				if c == 0 {
-					result = append(result, messages[m].Destination+":")
-				}
+				result = append(result, messages[m].Destination+"~~~"+uname)
 			}
 		}
 	}
+
+	sort.Sort(sort.Reverse(sort.StringSlice(result)))
 	return
 }
 
-// Returns a list of registered usernames
+// Returns a list of registered usernames from Gnomon
 func queryUsernames() (result []string, err error) {
-	if gnomon.Active == 1 && engram.Disk != nil {
-		result, _ = gnomon.Index.GetSCIDKeysByValue(nil, "0000000000000000000000000000000000000000000000000000000000000001", engram.Disk.GetAddress().String(), gnomon.Index.ChainHeight)
-		//fmt.Printf("[queryUsernames-Live] result: %v", result)
+	if gnomon.Index != nil && engram.Disk != nil {
+		result, _ = gnomon.Graviton.GetSCIDKeysByValue("0000000000000000000000000000000000000000000000000000000000000001", engram.Disk.GetAddress().String(), engram.Disk.Get_Daemon_TopoHeight(), false)
 		if len(result) <= 0 {
-			result, _ = gnomon.DB.GetSCIDKeysByValue("0000000000000000000000000000000000000000000000000000000000000001", engram.Disk.GetAddress().String(), gnomon.Index.ChainHeight, true)
-			//fmt.Printf("[queryUsernames-DB] result: %v", result)
+			result, _, err = gnomon.Index.GetSCIDKeysByValue(nil, "0000000000000000000000000000000000000000000000000000000000000001", engram.Disk.GetAddress().String(), engram.Disk.Get_Daemon_TopoHeight())
+			if err != nil {
+				fmt.Printf("[Gnomon] Querying usernames failed: %s\n", err)
+				return
+			}
 		}
+
 		sort.Sort(sort.StringSlice(result))
 	}
 
 	return
 }
 
+// Get the local list of registered usernames saved from previous Gnomon scans
+func getUsernames() (result []string, err error) {
+	usernames, err := GetEncryptedValue("Usernames", []byte("usernames"))
+	if err != nil {
+		return
+	}
+
+	result = strings.Split(string(usernames), ",")
+	return
+}
+
+// Set the Primary Username saved to a wallet's datashard
 func setPrimaryUsername(s string) (err error) {
 	err = StoreEncryptedValue("settings", []byte("username"), []byte(s))
 	return
 }
 
+// Get the Primary Username saved to a wallet's datashard
 func getPrimaryUsername() (err error) {
 	u, err := GetEncryptedValue("settings", []byte("username"))
 	if err != nil {
@@ -1321,16 +1820,20 @@ func getPrimaryUsername() (err error) {
 	return
 }
 
-// Returns a list of SCIDs that a wallet interacted with
+// Returns a list of SCIDs that a wallet interacted with from Gnomon
 func queryAssets() (result []string, err error) {
 	if gnomon.Active == 1 && engram.Disk != nil {
-		gnomon.DB.DBFolder = "datashards/gnomon"
-		result = gnomon.DB.GetSCIDInteractionByAddr(engram.Disk.GetAddress().String())
+		gnomon.BBolt.DBPath = filepath.Join(AppPath(), "datashards", "gnomon")
+		if session.Testnet {
+			gnomon.BBolt.DBPath = filepath.Join(AppPath(), "datashards", "gnomon_testnet")
+		}
+		result = gnomon.BBolt.GetSCIDInteractionByAddr(engram.Disk.GetAddress().String())
 	}
 
 	return
 }
 
+// Get the local path to a smart contract file (Ex: contract.bas)
 func prepareSC(path string) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -1341,31 +1844,82 @@ func prepareSC(path string) {
 	defer file.Close()
 }
 
+// Start the Gnomon indexer
 func startGnomon() {
-	if gnomon.Index != nil {
-		gnomon.Index.Endpoint = getDaemon()
-	} else if gnomon.Index == nil && gnomon.Active == 1 {
-		folder := "datashards/gnomon"
-		if !session.Network {
-			folder = "datashards/gnomon_testnet"
-		}
-		gnomon.DB = storage.NewGravDB(folder, "25ms")
-		gnomon.Index = indexer.NewIndexer(gnomon.DB, "Function Initialize", gnomon.DB.GetLastIndexHeight(), session.Daemon, "Daemon", false, false, true)
-		gnomon.Index.StartDaemonMode()
+	if walletapi.Connected {
+		if gnomon.Index == nil && gnomon.Active == 1 {
+			path := filepath.Join(AppPath(), "datashards", "gnomon")
+			if session.Testnet {
+				path = filepath.Join(AppPath(), "datashards", "gnomon_testnet")
+			}
+			gnomon.BBolt, _ = storage.NewBBoltDB(path, "gnomon")
+			gnomon.Graviton, _ = storage.NewGravDB(path, "25ms")
+			term := []string(nil)
+			term = append(term, "Function Initialize")
+			height, err := gnomon.Graviton.GetLastIndexHeight()
+			if err != nil {
+				height = 0
+			}
 
-		fmt.Printf("[Gnomon] Scan Status: [%d / %d]\n", gnomon.DB.GetLastIndexHeight(), gnomon.Index.LastIndexedHeight)
+			// Fastsync Config
+			config := &structures.FastSyncConfig{
+				Enabled:           true,
+				SkipFSRecheck:     true,
+				ForceFastSync:     true,
+				ForceFastSyncDiff: 20,
+				NoCode:            true,
+			}
+
+			// exclude the Gnomon SC, etc. to keep faster sync times
+			exclusions := []string{
+				"a05395bb0cf77adc850928b0db00eb5ca7a9ccbafd9a38d021c8d299ad5ce1a4;;;c9d23d2fc3aaa8e54e238a2218c0e5176a6e48780920fd8474fac5b0576110a2",
+			}
+
+			gnomon.Index = indexer.NewIndexer(gnomon.Graviton, gnomon.BBolt, "gravdb", term, height, session.Daemon, "daemon", false, true, config, exclusions)
+			indexer.InitLog(globals.Arguments, os.Stdout)
+
+			// We can allow parallel processing of x blocks at a time
+			go gnomon.Index.StartDaemonMode(1)
+
+			fmt.Printf("[Gnomon] Scan Status: [%d / %d]\n", height, gnomon.Index.LastIndexedHeight)
+		}
 	}
 }
 
+// Stop all indexers and close Gnomon
 func stopGnomon() {
 	if gnomon.Index != nil {
-		gnomon.Index.Closing = true
 		gnomon.Index.Close()
 		gnomon.Index = nil
 		fmt.Printf("[Gnomon] Closed all indexers.\n")
 	}
 }
 
+// Get the current state of all variables in a smart contract
+func getContractVars(scid string) (vars map[string]interface{}, err error) {
+	var params = rpc.GetSC_Params{SCID: scid, Variables: true, Code: false}
+	var result rpc.GetSC_Result
+
+	rpc_client.WS, _, err = websocket.DefaultDialer.Dial("ws://"+session.Daemon+"/ws", nil)
+	if err != nil {
+		return
+	}
+
+	input_output := rwc.New(rpc_client.WS)
+	rpc_client.RPC = jrpc2.NewClient(channel.RawJSON(input_output, input_output), nil)
+
+	err = rpc_client.RPC.CallResult(context.Background(), "DERO.GetSC", params, &result)
+	if err != nil {
+		fmt.Printf("Error getting SC variables: %s\n", err)
+		return
+	}
+
+	vars = result.VariableStringKeys
+
+	return
+}
+
+// Install a new smart contract
 func installSC(path string) (result string, err error) {
 	data := &InstallContract{}
 	file, err := os.Open(path)
@@ -1391,7 +1945,7 @@ func installSC(path string) (result string, err error) {
 		return
 	}
 
-	responseData, err := ioutil.ReadAll(resp.Body)
+	responseData, err := io.ReadAll(resp.Body)
 
 	err = json.Unmarshal([]byte(responseData), &data)
 	if err != nil {
@@ -1403,12 +1957,10 @@ func installSC(path string) (result string, err error) {
 
 	result = data.TXID
 
-	// Store SCID in local Graviton database
-	//err = StoreValue("Creations", []byte(result), []byte(session.Wallet))
-
 	return
 }
 
+// Set the Cyberdeck password
 func newRPCPassword() (s string) {
 	r := make([]byte, 20)
 	_, err := rand.Read(r)
@@ -1421,6 +1973,7 @@ func newRPCPassword() (s string) {
 	return
 }
 
+// Set the Cyberdeck username
 func newRPCUsername() (s string) {
 	r, _ := rand.Int(rand.Reader, big.NewInt(1600))
 	w := mnemonics.Key_To_Words(r, "english")
@@ -1430,266 +1983,447 @@ func newRPCUsername() (s string) {
 	return
 }
 
-func cyberdeckUpdate() {
-	var timer int
-	cyberdeck.interval = 60
-	status.Authenticator.SetValue(60)
-
-	for cyberdeck.active == 1 {
-		if cyberdeck.server != nil {
-			cyberdeck.status.Text = "Allowed"
-			cyberdeck.status.Color = colors.Green
-			cyberdeck.status.Refresh()
-			status.Cyberdeck.FillColor = colors.Gray
-			status.Cyberdeck.Refresh()
-			status.Cyberdeck.FillColor = colors.Green
-			status.Cyberdeck.Refresh()
-			cyberdeck.toggle.SetText("Turn Off")
-			cyberdeck.userText.Disable()
-			cyberdeck.passText.Disable()
-			cyberdeck.checkbox.Disable()
-
-			if timer >= cyberdeck.interval {
-				timer = 0
-				if cyberdeck.mode == 1 {
-					setRPCLogin()
-					fmt.Printf("[Cyberdeck] Authentication Credentials Updated\n")
-					return
-				}
-			} else {
-				if cyberdeck.mode == 1 {
-					status.Authenticator.SetValue(float64(60 - timer))
-					status.Authenticator.Refresh()
-					cyberdeck.userText.Text = cyberdeck.user
-					cyberdeck.passText.Text = cyberdeck.pass
-					cyberdeck.userText.Refresh()
-					cyberdeck.passText.Refresh()
-					cyberdeck.checkbox.Checked = true
-					cyberdeck.checkbox.Refresh()
-				} else {
-					cyberdeck.userText.Text = cyberdeck.user
-					cyberdeck.passText.Text = cyberdeck.pass
-					cyberdeck.userText.Refresh()
-					cyberdeck.passText.Refresh()
-					cyberdeck.checkbox.Checked = false
-					cyberdeck.checkbox.Refresh()
-				}
-			}
-		} else {
-			cyberdeck.status.Text = "Blocked"
-			cyberdeck.status.Color = colors.Gray
-			cyberdeck.status.Refresh()
-			status.Cyberdeck.FillColor = colors.Gray
-			status.Cyberdeck.Refresh()
-			cyberdeck.toggle.SetText("Turn On")
-		}
-
-		timer++
-		time.Sleep(time.Second)
-	}
-}
-
-// TODO: Rework this completely
-func setRPCLogin() {
+// Start an RPC server to allow decentralized application communication (TODO: Replace with or add permissioned websockets?)
+func toggleCyberdeck() {
 	var err error
 	if engram.Disk == nil {
 		return
 	}
 
-	if cyberdeck.active == 1 && cyberdeck.server != nil && cyberdeck.mode == 1 {
-		cyberdeck.active = 0
+	if cyberdeck.server != nil {
 		cyberdeck.server.RPCServer_Stop()
-	}
-
-	if cyberdeck.mode == 1 {
-		cyberdeck.user = newRPCUsername()
-		cyberdeck.pass = newRPCPassword()
-		globals.Arguments["--rpc-login"] = cyberdeck.user + ":" + cyberdeck.pass
-		cyberdeck.userText.Text = cyberdeck.user
-		cyberdeck.passText.Text = cyberdeck.pass
-		cyberdeck.userText.Refresh()
-		cyberdeck.passText.Refresh()
-	}
-
-	if !session.Network {
-		globals.Arguments["--rpc-bind"] = fmt.Sprintf("127.0.0.1:%d", DEFAULT_TESTNET_WALLET_PORT)
-	} else {
-		globals.Arguments["--rpc-bind"] = fmt.Sprintf("127.0.0.1:%d", DEFAULT_WALLET_PORT)
-	}
-
-	globals.Arguments["--rpc-login"] = cyberdeck.user + ":" + cyberdeck.pass
-
-	cyberdeck.server, err = rpcserver.RPCServer_Start(engram.Disk, "Cyberdeck")
-	if err != nil {
 		cyberdeck.server = nil
 		cyberdeck.status.Text = "Blocked"
 		cyberdeck.status.Color = colors.Gray
 		cyberdeck.status.Refresh()
-		status.Cyberdeck.FillColor = colors.Red
-		status.Cyberdeck.StrokeColor = colors.Red
+		cyberdeck.toggle.Text = "Turn On"
+		cyberdeck.toggle.Refresh()
+		status.Cyberdeck.FillColor = colors.Gray
+		status.Cyberdeck.StrokeColor = colors.Gray
 		status.Cyberdeck.Refresh()
-		status.Authenticator.Value = 0
-		status.Authenticator.Refresh()
-		return
-	}
-
-	cyberdeck.status.Text = "Allowed"
-	cyberdeck.status.Color = colors.Green
-	cyberdeck.status.Refresh()
-	status.Cyberdeck.FillColor = colors.Green
-	status.Cyberdeck.StrokeColor = colors.Green
-	status.Cyberdeck.Refresh()
-	if cyberdeck.mode == 0 {
+		cyberdeck.userText.Text = cyberdeck.user
+		cyberdeck.passText.Text = cyberdeck.pass
 		cyberdeck.userText.Enable()
 		cyberdeck.passText.Enable()
 	} else {
-		cyberdeck.userText.Disable()
-		cyberdeck.passText.Disable()
+		if session.Testnet {
+			globals.Arguments["--rpc-bind"] = fmt.Sprintf("127.0.0.1:%d", DEFAULT_TESTNET_WALLET_PORT)
+		} else {
+			globals.Arguments["--rpc-bind"] = fmt.Sprintf("127.0.0.1:%d", DEFAULT_WALLET_PORT)
+		}
+
+		if cyberdeck.user == "" {
+			cyberdeck.user = newRPCUsername()
+		}
+
+		if cyberdeck.pass == "" {
+			cyberdeck.pass = newRPCPassword()
+		}
+
+		globals.Arguments["--rpc-login"] = cyberdeck.user + ":" + cyberdeck.pass
+
+		cyberdeck.server, err = rpcserver.RPCServer_Start(engram.Disk, "Cyberdeck")
+		if err != nil {
+			cyberdeck.server = nil
+			cyberdeck.status.Text = "Blocked"
+			cyberdeck.status.Color = colors.Gray
+			cyberdeck.status.Refresh()
+			cyberdeck.toggle.Text = "Turn On"
+			cyberdeck.toggle.Refresh()
+			status.Cyberdeck.FillColor = colors.Gray
+			status.Cyberdeck.StrokeColor = colors.Gray
+			status.Cyberdeck.Refresh()
+			cyberdeck.userText.Text = cyberdeck.user
+			cyberdeck.passText.Text = cyberdeck.pass
+			cyberdeck.userText.Enable()
+			cyberdeck.passText.Enable()
+		} else {
+			cyberdeck.status.Text = "Allowed"
+			cyberdeck.status.Color = colors.Green
+			cyberdeck.status.Refresh()
+			cyberdeck.toggle.Text = "Turn Off"
+			cyberdeck.toggle.Refresh()
+			status.Cyberdeck.FillColor = colors.Green
+			status.Cyberdeck.StrokeColor = colors.Green
+			status.Cyberdeck.Refresh()
+			cyberdeck.userText.Text = cyberdeck.user
+			cyberdeck.passText.Text = cyberdeck.pass
+			cyberdeck.userText.Disable()
+			cyberdeck.passText.Disable()
+		}
 	}
-	cyberdeck.active = 1
-	go cyberdeckUpdate()
+}
+
+// Convert DERO value to USD (TODO: rework this and support other currencies)
+func convertBalance() {
+	if !session.Offline {
+		if session.BalanceUSDText == nil {
+			session.BalanceUSDText = canvas.NewText("", colors.Gray)
+		}
+
+		check, _ := engram.Disk.Get_Balance()
+		if check == 0 {
+			session.BalanceUSDText.Text = "USD  0.00"
+			session.BalanceUSDText.Refresh()
+			return
+		}
+
+		url := "https://api.coingecko.com/api/v3/simple/price?ids=dero&vs_currencies=usd"
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			fmt.Printf("%s", err)
+			session.BalanceUSDText.Text = ""
+			session.BalanceUSDText.Refresh()
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			fmt.Printf("[Engram] %s\n", err)
+			session.BalanceUSDText.Text = ""
+			session.BalanceUSDText.Refresh()
+			return
+		}
+		defer resp.Body.Close()
+
+		var resData map[string]interface{}
+		responseData, err := io.ReadAll(resp.Body)
+
+		err = json.Unmarshal(responseData, &resData)
+		if err != nil {
+			fmt.Printf("[Engram] %s\n", err)
+			session.BalanceUSDText.Text = ""
+			session.BalanceUSDText.Refresh()
+			return
+		}
+
+		defer resp.Body.Close()
+
+		if resData["dero"] == nil {
+			err = errors.New("error: could not query price from coingecko")
+			session.BalanceUSDText.Text = ""
+			session.BalanceUSDText.Refresh()
+			return
+		}
+
+		node := resData["dero"].(map[string]interface{})
+		result := fmt.Sprintf("%.2f", node["usd"])
+		f, _ := strconv.ParseFloat(result, 5)
+		tmp, _ := engram.Disk.Get_Balance()
+		bal := fmt.Sprintf("%d", tmp)
+		b, _ := strconv.ParseFloat(bal, 5)
+		usd := (f / 100000) * b
+		formatted := fmt.Sprintf("%.2f", usd)
+		session.BalanceUSD = formatted
+		session.BalanceUSDText.Text = "USD  " + formatted
+		session.BalanceUSDText.Refresh()
+		fmt.Printf("[Engram] Value conversion updated.\n")
+	} else {
+		session.BalanceUSD = "-.--"
+		session.BalanceUSDText.Text = "USD  " + "-.--"
+		session.BalanceUSDText.Refresh()
+	}
+}
+
+// Get the latest smart contract header data (must follow the standard here: https://github.com/civilware/artificer-nfa-standard/blob/main/Headers/README.md)
+func getContractHeader(scid crypto.Hash) (name string, desc string, icon string, owner string, code string) {
+	var headerData []*structures.SCIDVariable
+
+	headerData = gnomon.Index.GravDBBackend.GetAllSCIDVariableDetails(scid.String())
+	if headerData == nil {
+		addIndex := make(map[string]*structures.FastSyncImport)
+		addIndex[scid.String()] = &structures.FastSyncImport{}
+		gnomon.Index.AddSCIDToIndex(addIndex, false, true)
+		headerData = gnomon.Index.GravDBBackend.GetAllSCIDVariableDetails(scid.String())
+	}
+
+	for _, h := range headerData {
+		switch key := h.Key.(type) {
+		case string:
+			if key == "nameHdr" {
+				name = h.Value.(string)
+			}
+
+			if key == "descrHdr" {
+				desc = h.Value.(string)
+			}
+
+			if key == "iconURLHdr" {
+				icon = h.Value.(string)
+			}
+
+			if key == "owner" {
+				owner = h.Value.(string)
+			}
+
+			if key == "C" {
+				code = h.Value.(string)
+			}
+		}
+	}
 
 	return
 }
 
-func getPrice() {
-	check, _ := engram.Disk.Get_Balance()
-	if check == 0 {
-		session.BalanceUSDText.Text = "USD  0.00"
-		session.BalanceUSDText.Refresh()
-		return
+// Send an asset from one account to another
+func transferAsset(scid crypto.Hash, address string, amount string) (txid crypto.Hash, err error) {
+	var amount_to_transfer uint64
+
+	if amount == "" {
+		amount = ".00001"
 	}
 
-	url := "https://api.coingecko.com/api/v3/simple/price?ids=dero&vs_currencies=usd"
-	req, err := http.NewRequest("GET", url, nil)
+	amount_to_transfer, err = globals.ParseAmount(amount)
 	if err != nil {
-		fmt.Printf("%s", err)
-		session.BalanceUSDText.Text = ""
-		session.BalanceUSDText.Refresh()
+		fmt.Printf("[Transfer] Failed parsing transfer amount: %s\n", err)
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	tx, err := engram.Disk.TransferPayload0([]rpc.Transfer{{SCID: scid, Amount: amount_to_transfer, Destination: address}}, 0, false, rpc.Arguments{}, 0, false)
 	if err != nil {
-		fmt.Printf("[USD] %s\n", err)
-		session.BalanceUSDText.Text = ""
-		session.BalanceUSDText.Refresh()
-		return
-	}
-	defer resp.Body.Close()
-
-	var resData map[string]interface{}
-	responseData, err := ioutil.ReadAll(resp.Body)
-
-	err = json.Unmarshal(responseData, &resData)
-	if err != nil {
-		fmt.Printf("[USD] %s\n", err)
-		session.BalanceUSDText.Text = ""
-		session.BalanceUSDText.Refresh()
+		fmt.Printf("[Transfer] Failed to build transaction: %s\n", err)
 		return
 	}
 
-	defer resp.Body.Close()
-
-	if resData["dero"] == nil {
-		err = errors.New("error: could not query price from coingecko")
-		fmt.Printf("[USD] %s\n", err)
-		fmt.Printf("[USD] %s\n", resp.Body)
-		fmt.Printf("[USD] %s\n", resData)
-		session.BalanceUSDText.Text = ""
-		session.BalanceUSDText.Refresh()
+	if err = engram.Disk.SendTransaction(tx); err != nil {
+		fmt.Printf("[Transfer] Failed to send asset: %s - %s\n", scid, err)
 		return
 	}
 
-	node := resData["dero"].(map[string]interface{})
-	result := fmt.Sprintf("%.2f", node["usd"])
-	f, _ := strconv.ParseFloat(result, 5)
-	tmp, _ := engram.Disk.Get_Balance()
-	bal := fmt.Sprintf("%d", tmp)
-	b, _ := strconv.ParseFloat(bal, 5)
-	usd := (f / 100000) * b
-	formatted := fmt.Sprintf("%.2f", usd)
-	session.BalanceUSD = formatted
-	session.BalanceUSDText.Text = "USD  " + formatted
-	session.BalanceUSDText.Refresh()
-	fmt.Printf("[USD] Value conversion updated.\n")
+	txid = tx.GetHash()
+
+	fmt.Printf("[Transfer] Successfully sent asset: %s - TXID: %s\n", scid, tx.GetHash().String())
+	return
 }
 
-/*
-func invokeSC(f string, v string, u string, p string) (r *jsonrpc.RPCResponse) {
-	rpcClient := jsonrpc.NewClientWithOpts("http://127.0.0.1:40403/rpc", &jsonrpc.RPCClientOpts{
-		CustomHeaders: map[string]string{
-			"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte(u+":"+p)),
-		},
-	})
-	r, _ = rpcClient.Call(f, v) // send with Authorization-Header
+// Transfer a username to another account
+func transferUsername(username string, address string) (err error) {
+	var args = rpc.Arguments{}
+	var dest string
+
+	scid := crypto.HashHexToHash("0000000000000000000000000000000000000000000000000000000000000001")
+
+	args = append(args, rpc.Argument{Name: "entrypoint", DataType: "S", Value: "TransferOwnership"})
+	args = append(args, rpc.Argument{Name: "SC_ID", DataType: "H", Value: scid})
+	args = append(args, rpc.Argument{Name: "SC_ACTION", DataType: "U", Value: uint64(rpc.SC_CALL)})
+	args = append(args, rpc.Argument{Name: "name", DataType: "S", Value: username})
+	args = append(args, rpc.Argument{Name: "newowner", DataType: "S", Value: address})
+
+	if !session.Testnet {
+		dest = "dero1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgny8270"
+	} else {
+		dest = "deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p"
+	}
+
+	transfer := rpc.Transfer{
+		Destination: dest,
+		Amount:      0,
+		Burn:        0,
+	}
+
+	gasParams := rpc.GasEstimate_Params{
+		SC_RPC:    args,
+		SC_Value:  0,
+		Ringsize:  2,
+		Signer:    engram.Disk.GetAddress().String(),
+		Transfers: []rpc.Transfer{transfer},
+	}
+
+	storage, err := getGasEstimate(gasParams)
+	if err != nil {
+		fmt.Printf("[%s] GasEstimate Error: %s\n", "TransferOwnership", err)
+		return
+	}
+
+	tx, err := engram.Disk.TransferPayload0([]rpc.Transfer{transfer}, 2, false, args, storage, false)
+	if err != nil {
+		fmt.Printf("[%s] Build Transaction Error: %s\n", "TransferOwnership", err)
+		return
+	}
+
+	txid := tx.GetHash().String()
+
+	err = engram.Disk.SendTransaction(tx)
+	if err != nil {
+		fmt.Printf("[%s] Send Tx Error: %s", "TransferOwnership", err)
+		return
+	}
+
+	walletapi.WaitNewHeightBlock()
+	fmt.Printf("[%s] Username transfer successful - TXID:  %s\n", "TransferOwnership", txid)
+	_ = tx
 
 	return
 }
-*/
 
-func checkAccount(s string) (err error) {
-	var zero crypto.Hash
-	payload := DaemonCheckRPC{
-		Jsonrpc: "2.0",
-		ID:      "1",
-		Method:  "DERO.GetEncryptedBalance",
+// Execute arbitrary exportable smart contract functions
+func executeContractFunction(scid crypto.Hash, dero_amount uint64, asset_amount uint64, funcName string, funcType rpc.DataType, params []dvm.Variable) (err error) {
+	var args = rpc.Arguments{}
+	var burn uint64
+	var zero uint64
+	var dest string
+
+	args = append(args, rpc.Argument{Name: "entrypoint", DataType: "S", Value: funcName})
+	args = append(args, rpc.Argument{Name: "SC_ID", DataType: "H", Value: scid})
+	args = append(args, rpc.Argument{Name: "SC_ACTION", DataType: "U", Value: uint64(rpc.SC_CALL)})
+
+	for p := range params {
+		if params[p].Type == 0x4 {
+			args = append(args, rpc.Argument{Name: params[p].Name, DataType: "U", Value: params[p].ValueUint64})
+		} else {
+			args = append(args, rpc.Argument{Name: params[p].Name, DataType: "S", Value: params[p].ValueString})
+		}
 	}
 
-	payload.Params.Address = s
-	payload.Params.SCID = zero
-	payload.Params.Merkle_Balance_TreeHash = ""
-	payload.Params.TopoHeight = engram.Disk.Get_Daemon_TopoHeight()
+	if !session.Testnet {
+		dest = "dero1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgny8270"
+	} else {
+		dest = "deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p"
+	}
 
-	j, err := json.Marshal(payload)
+	var transfer rpc.Transfer
+
+	if dero_amount != zero {
+		burn = dero_amount
+
+		transfer = rpc.Transfer{
+			Destination: dest,
+			Amount:      0,
+			Burn:        burn,
+		}
+	} else if asset_amount != zero {
+		burn = asset_amount
+
+		transfer = rpc.Transfer{
+			SCID:        scid,
+			Destination: dest,
+			Amount:      0,
+			Burn:        burn,
+		}
+	} else {
+		transfer = rpc.Transfer{
+			Destination: dest,
+			Amount:      0,
+			Burn:        0,
+		}
+	}
+
+	gasParams := rpc.GasEstimate_Params{
+		SC_RPC:    args,
+		SC_Value:  0,
+		Ringsize:  2,
+		Signer:    engram.Disk.GetAddress().String(),
+		Transfers: []rpc.Transfer{transfer},
+	}
+
+	storage, err := getGasEstimate(gasParams)
 	if err != nil {
-		fmt.Printf("[Engram] Marshall: %s", err)
+		fmt.Printf("[%s] GasEstimate Error: %s\n", funcName, err)
 		return
 	}
 
-	body := bytes.NewReader(j)
-
-	// Connect to daemon
-	url := "http://" + session.Daemon + "/json_rpc"
-	req, err := http.NewRequest("POST", url, body)
+	tx, err := engram.Disk.TransferPayload0([]rpc.Transfer{transfer}, 2, false, args, storage, false)
 	if err != nil {
-		fmt.Printf("[Engram] Connect: %s", err)
+		fmt.Printf("[%s] Build Transaction Error: %s\n", funcName, err)
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	err = engram.Disk.SendTransaction(tx)
 	if err != nil {
-		fmt.Printf("[Engram] Response: %s", err)
+		fmt.Printf("[%s] Send Tx Error: %s", funcName, err)
 		return
 	}
-	defer resp.Body.Close()
 
-	var resData map[string]interface{}
-	responseData, err := ioutil.ReadAll(resp.Body)
+	walletapi.WaitNewHeightBlock()
+	fmt.Printf("[%s] Function execution successful - TXID:  %s\n", funcName, tx.GetHash().String())
+	_ = tx
 
-	err = json.Unmarshal(responseData, &resData)
+	return
+}
+
+// Delete the Gnomon directory
+func cleanGnomonData() error {
+	dir, err := os.ReadDir(filepath.Join(AppPath(), "datashards", "gnomon"))
 	if err != nil {
-		fmt.Printf("[Engram] Unmarshall: %s\n", err)
+		fmt.Printf("[Gnomon] Error purging local Gnomon data: %s\n", err)
+		return err
+	}
+
+	for _, d := range dir {
+		os.RemoveAll(filepath.Join([]string{AppPath(), "datashards", "gnomon", d.Name()}...))
+		fmt.Printf("[Gnomon] Local Gnomon data has been purged successfully\n")
+	}
+
+	return nil
+}
+
+// Delete the datashard directory for the active wallet
+func cleanWalletData() (err error) {
+	path, err := GetShard()
+	if err != nil {
 		return
 	}
 
-	fmt.Printf("[Check] Data: %s\n", resData)
+	dir, err := os.ReadDir(path)
+	if err != nil {
+		fmt.Printf("[Engram] Error purging local datashard data: %s\n", err)
+		return err
+	}
 
-	if resData["result"] == nil {
-		err = errors.New("account is not registered")
-		fmt.Printf("[Engram] %s\n", err)
+	for _, d := range dir {
+		os.RemoveAll(filepath.Join([]string{path, d.Name()}...))
+		fmt.Printf("[Engram] Local datashard data has been purged successfully\n")
+	}
+
+	return nil
+}
+
+// Get transaction data for any TXID from the daemon
+func getTxData(txid string) (result rpc.GetTransaction_Result, err error) {
+	if engram.Disk == nil || session.Offline {
 		return
 	}
 
-	node := resData["result"].(map[string]interface{})
-	fmt.Printf("[Engram] Dump: %s", node)
-	reg := node["registration"].(string)
+	var params rpc.GetTransaction_Params
 
-	//result = true
+	params.Tx_Hashes = append(params.Tx_Hashes, txid)
 
-	fmt.Printf("[Check] %s is a registered\n", reg)
+	rpc_client.WS, _, err = websocket.DefaultDialer.Dial("ws://"+session.Daemon+"/ws", nil)
+
+	input_output := rwc.New(rpc_client.WS)
+	rpc_client.RPC = jrpc2.NewClient(channel.RawJSON(input_output, input_output), nil)
+
+	if err = rpc_client.RPC.CallResult(context.Background(), "DERO.GetTransaction", params, &result); err != nil {
+		fmt.Printf("[getTxData] TXID: %s (Failed: %s)\n", txid, err)
+		return
+	}
+
+	rpc_client.WS.Close()
+	rpc_client.RPC.Close()
+
+	if result.Status != "OK" {
+		fmt.Printf("[getTxData] TXID: %s (Failed: %s)\n", txid, result.Status)
+		return
+	}
+
+	if len(result.Txs_as_hex[0]) < 50 {
+		return
+	}
+
+	return
+}
+
+// Use a transaction proof to decode and return the payload
+func proveGetTxData(txid string, proof_string string) (result ProofData, err error) {
+	data, err := getTxData(txid)
+	if err != nil {
+		return
+	}
+
+	ring := data.Txs[0].Ring
+
+	result.Receivers, result.Amounts, _, result.Payloads, err = proof.Prove(proof_string, txid, ring, engram.Disk.GetNetwork())
 
 	return
 }

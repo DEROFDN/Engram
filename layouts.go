@@ -1,4 +1,4 @@
-// Copyright 2021-2022 DERO Foundation. All rights reserved.
+// Copyright 2023-2024 DERO Foundation. All rights reserved.
 // Use of this source code in any form is governed by RESEARCH license.
 // license can be found in the LICENSE file.
 //
@@ -20,11 +20,15 @@ import (
 	"fmt"
 	"image/color"
 	"net/url"
+	"os"
 	"path/filepath"
-	"runtime"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -32,15 +36,19 @@ import (
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
+	x "fyne.io/x/fyne/widget"
 	"github.com/deroproject/derohe/cryptography/crypto"
+	"github.com/deroproject/derohe/dvm"
 	"github.com/deroproject/derohe/globals"
 	"github.com/deroproject/derohe/rpc"
-	"github.com/deroproject/derohe/transaction"
 	"github.com/deroproject/derohe/walletapi"
 	"github.com/deroproject/derohe/walletapi/mnemonics"
+	"github.com/deroproject/graviton"
 )
 
 func layoutMain() fyne.CanvasObject {
+	// Set theme
+	a.Settings().SetTheme(themes.main)
 	// Reset UI resources
 	resetResources()
 	initSettings()
@@ -50,32 +58,35 @@ func layoutMain() fyne.CanvasObject {
 
 	// Define objects
 
-	errorText := canvas.NewText(" ", colors.Green)
-	errorText.Alignment = fyne.TextAlignCenter
-	errorText.TextSize = 12
+	btnLogin := widget.NewButton("Sign In", nil)
 
 	if session.Error != "" {
-		errorText.Text = session.Error
-		errorText.Refresh()
+		btnLogin.Text = session.Error
+		btnLogin.Disable()
+		btnLogin.Refresh()
 		session.Error = ""
 	}
 
-	btnLogin := widget.NewButtonWithIcon(" Enter", resourceEnterPng, func() {
+	btnLogin.OnTapped = func() {
 		if session.Path == "" {
-			errorText.Text = "No account selected."
-			errorText.Refresh()
+			btnLogin.Text = "No account selected..."
+			btnLogin.Disable()
+			btnLogin.Refresh()
 		} else if session.Password == "" {
-			errorText.Text = "Invalid password."
-			errorText.Refresh()
+			btnLogin.Text = "Invalid password..."
+			btnLogin.Disable()
+			btnLogin.Refresh()
 		} else {
-			errorText.Text = ""
-			errorText.Refresh()
+			btnLogin.Text = "Sign In"
+			btnLogin.Enable()
+			btnLogin.Refresh()
 			login()
-			errorText.Text = session.Error
-			errorText.Refresh()
+			btnLogin.Text = session.Error
+			btnLogin.Disable()
+			btnLogin.Refresh()
 			session.Error = ""
 		}
-	})
+	}
 
 	btnLogin.Disable()
 
@@ -83,17 +94,21 @@ func layoutMain() fyne.CanvasObject {
 		if session.Domain == "app.main" || session.Domain == "app.register" {
 			if k.Name == fyne.KeyReturn {
 				if session.Path == "" {
-					errorText.Text = "No account selected."
-					errorText.Refresh()
+					btnLogin.Text = "No account selected..."
+					btnLogin.Disable()
+					btnLogin.Refresh()
 				} else if session.Password == "" {
-					errorText.Text = "Invalid password."
-					errorText.Refresh()
+					btnLogin.Text = "Invalid password..."
+					btnLogin.Disable()
+					btnLogin.Refresh()
 				} else {
-					errorText.Text = ""
-					errorText.Refresh()
+					btnLogin.Text = "Sign In"
+					btnLogin.Enable()
+					btnLogin.Refresh()
 					login()
-					errorText.Text = session.Error
-					errorText.Refresh()
+					btnLogin.Text = "Invalid password..."
+					btnLogin.Disable()
+					btnLogin.Refresh()
 					session.Error = ""
 				}
 			}
@@ -102,38 +117,84 @@ func layoutMain() fyne.CanvasObject {
 		}
 	})
 
-	btnCreate := widget.NewButton("New Account", func() {
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkCreate := widget.NewHyperlinkWithStyle("Create a new account", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkCreate.OnTapped = func() {
 		session.Domain = "app.create"
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutNewAccount())
-	})
+		removeOverlays()
+	}
 
-	btnRestore := widget.NewButton("Account Recovery", func() {
+	linkRecover := widget.NewHyperlinkWithStyle("Recover an existing account", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkRecover.OnTapped = func() {
 		session.Domain = "app.restore"
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutRestore())
-	})
+		removeOverlays()
+	}
 
-	btnSettings := widget.NewButton("Settings", func() {
+	linkSettings := widget.NewHyperlinkWithStyle("Settings", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkSettings.OnTapped = func() {
 		session.Domain = "app.settings"
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutSettings())
-	})
+		removeOverlays()
+	}
 
-	wPassword := newRtnEntry()
-	// Set password masking
+	modeData := binding.BindBool(&session.Offline)
+	mode := widget.NewCheckWithData(" Offline Mode", modeData)
+	mode.OnChanged = func(b bool) {
+		if b {
+			session.Offline = true
+		} else {
+			session.Offline = false
+		}
+	}
+
+	footer := canvas.NewText("© 2023  DERO FOUNDATION  |  VERSION  "+version.String(), colors.Gray)
+	footer.TextSize = 10
+	footer.Alignment = fyne.TextAlignCenter
+	footer.TextStyle = fyne.TextStyle{Bold: true}
+
+	wPassword := NewReturnEntry()
+
 	wPassword.Password = true
-	// OnChange assign password to session variable
 	wPassword.OnChanged = func(s string) {
 		session.Error = ""
-		errorText.Text = ""
-		errorText.Refresh()
+		btnLogin.Text = "Sign In"
+		btnLogin.Enable()
+		btnLogin.Refresh()
 		session.Password = s
 
 		if len(s) < 1 {
 			btnLogin.Disable()
+			btnLogin.Refresh()
 		} else if session.Path == "" {
 			btnLogin.Disable()
+			btnLogin.Refresh()
 		} else {
 			btnLogin.Enable()
 		}
@@ -143,21 +204,25 @@ func layoutMain() fyne.CanvasObject {
 	wPassword.SetPlaceHolder("Password")
 
 	// Get account databases in app directory
-	list := GetAccounts()
+	list, err := GetAccounts()
+	if err != nil {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutAlert(2))
+	}
 
 	// Populate the accounts in dropdown menu
 	wAccount := widget.NewSelect(list, nil)
 	wAccount.PlaceHolder = "(Select Account)"
 	wAccount.OnChanged = func(s string) {
 		session.Error = ""
-		errorText.Text = ""
-		errorText.Refresh()
+		btnLogin.Text = "Sign In"
+		btnLogin.Refresh()
 
 		// OnChange set wallet path
-		if !session.Network {
-			session.Path = AppPath() + string(filepath.Separator) + "testnet" + string(filepath.Separator) + s
+		if session.Testnet {
+			session.Path = filepath.Join(AppPath(), "testnet") + string(filepath.Separator) + s
 		} else {
-			session.Path = AppPath() + string(filepath.Separator) + "mainnet" + string(filepath.Separator) + s
+			session.Path = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator) + s
 		}
 
 		if session.Password != "" {
@@ -179,65 +244,78 @@ func layoutMain() fyne.CanvasObject {
 	}
 
 	wSpacer := widget.NewLabel(" ")
-	heading := canvas.NewText("Sign In", colors.Green)
-	heading.TextSize = 22
-	heading.Alignment = fyne.TextAlignCenter
-	heading.TextStyle = fyne.TextStyle{Bold: true}
 
 	rectStatus := canvas.NewRectangle(color.Transparent)
 	rectStatus.SetMinSize(fyne.NewSize(10, 10))
 
-	res.bg2.SetMinSize(fyne.NewSize(300, 200))
+	res.bg2.SetMinSize(fyne.NewSize(ui.Width, ui.MaxHeight*0.2))
 	res.bg2.Refresh()
-	res.login_footer.SetMinSize(fyne.NewSize(300, 80))
-	res.login_footer.Refresh()
 
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
+	headerBox := canvas.NewRectangle(color.Transparent)
+	headerBox.SetMinSize(fyne.NewSize(ui.Width, 1))
+
+	frame := &iframe{}
 
 	rectSpacer := canvas.NewRectangle(color.Transparent)
-	rectSpacer.SetMinSize(fyne.NewSize(300, 5))
+	rectSpacer.SetMinSize(fyne.NewSize(ui.Width, 5))
 
 	status.Connection.FillColor = colors.Gray
 	status.Cyberdeck.FillColor = colors.Gray
 	status.Sync.FillColor = colors.Gray
 
-	if node.Active == 0 && session.Type == "Local" {
-		go startDaemon()
-	} else if node.Active == 1 && session.Type == "Remote" {
-		stopDaemon()
-		fmt.Print("[Engram] Daemon closed.\n")
-	}
-
-	if gnomon.Active == 1 && gnomon.Index == nil {
-		go startGnomon()
-	} else if gnomon.Active == 0 && gnomon.Index != nil {
-		stopGnomon()
-	}
-
-	// Create a new form for account/password inputs
 	form := container.NewVBox(
-		rectSpacer,
-		rectSpacer,
-		rectSpacer,
-		res.bg2,
-		heading,
 		wSpacer,
+		container.NewStack(
+			res.bg2,
+		),
+		rectSpacer,
+		rectSpacer,
 		wAccount,
+		rectSpacer,
 		wPassword,
 		rectSpacer,
-		errorText,
+		mode,
+		rectSpacer,
 		rectSpacer,
 		btnLogin,
 		wSpacer,
-		btnCreate,
-		btnRestore,
-		btnSettings,
-		wSpacer,
-		res.login_footer,
+		container.NewStack(
+			container.NewHBox(
+				line1,
+				layout.NewSpacer(),
+				menuLabel,
+				layout.NewSpacer(),
+				line2,
+			),
+		),
+		rectSpacer,
+		rectSpacer,
+		container.NewStack(
+			container.NewHBox(
+				layout.NewSpacer(),
+				linkCreate,
+				layout.NewSpacer(),
+			),
+		),
+		rectSpacer,
+		container.NewStack(
+			container.NewHBox(
+				layout.NewSpacer(),
+				linkRecover,
+				layout.NewSpacer(),
+			),
+		),
+		rectSpacer,
+		container.NewStack(
+			container.NewHBox(
+				layout.NewSpacer(),
+				linkSettings,
+				layout.NewSpacer(),
+			),
+		),
 	)
 
-	layout := container.NewMax(
+	layout := container.NewStack(
 		frame,
 		container.NewBorder(
 			container.NewVBox(
@@ -246,25 +324,8 @@ func layoutMain() fyne.CanvasObject {
 				),
 			),
 			container.NewVBox(
-				container.NewHBox(
-					layout.NewSpacer(),
-					container.NewMax(
-						rectStatus,
-						status.Connection,
-					),
-					widget.NewLabel(""),
-					container.NewMax(
-						rectStatus,
-						status.Sync,
-					),
-					widget.NewLabel(""),
-					container.NewMax(
-						rectStatus,
-						status.Cyberdeck,
-					),
-					layout.NewSpacer(),
-				),
-				rectSpacer,
+				footer,
+				wSpacer,
 			),
 			nil,
 			nil,
@@ -275,6 +336,7 @@ func layoutMain() fyne.CanvasObject {
 }
 
 func layoutDashboard() fyne.CanvasObject {
+	resizeWindow(ui.MaxWidth, ui.MaxHeight)
 	// Reset UI resources
 	resetResources()
 
@@ -292,42 +354,29 @@ func layoutDashboard() fyne.CanvasObject {
 	session.BalanceText.TextSize = 28
 	session.BalanceText.TextStyle = fyne.TextStyle{Bold: true}
 
-	session.BalanceUSDText = canvas.NewText("", colors.Gray)
-	session.BalanceUSDText.TextSize = 14
-	session.BalanceUSDText.TextStyle = fyne.TextStyle{Bold: true}
-
-	modeColor := colors.Cold
-	if !session.Network {
-		session.ModeText = canvas.NewText("T  E  S  T  N  E  T", modeColor)
+	if session.BalanceUSD == "" {
+		session.BalanceUSDText = canvas.NewText("", colors.Gray)
+		session.BalanceUSDText.TextSize = 14
+		session.BalanceUSDText.TextStyle = fyne.TextStyle{Bold: true}
 	} else {
-		session.ModeText = canvas.NewText("M  A  I  N  N  E  T", modeColor)
-	}
-	session.ModeText.TextSize = 13
-	session.ModeText.TextStyle = fyne.TextStyle{Bold: true}
-
-	shortShard := canvas.NewText("PRIMARY  USERNAME", colors.Gray)
-	shortShard.TextStyle = fyne.TextStyle{Bold: true}
-	shortShard.TextSize = 12
-
-	linkColor := colors.Gray
-
-	if cyberdeck.server == nil {
-		session.Link = "Blocked"
-		linkColor = colors.Gray
+		session.BalanceUSDText = canvas.NewText("USD  "+session.BalanceUSD, colors.Gray)
+		session.BalanceUSDText.TextSize = 14
+		session.BalanceUSDText.TextStyle = fyne.TextStyle{Bold: true}
 	}
 
-	cyberdeck.status = canvas.NewText(session.Link, linkColor)
-	cyberdeck.status.TextSize = 22
-	cyberdeck.status.TextStyle = fyne.TextStyle{Bold: true}
+	network := ""
+	if session.Testnet {
+		network = " T  E  S  T  N  E  T "
+	} else {
+		network = " M  A  I  N  N  E  T "
+	}
 
 	rectStatus := canvas.NewRectangle(color.Transparent)
 	rectStatus.SetMinSize(fyne.NewSize(10, 10))
 	rect := canvas.NewRectangle(color.Transparent)
-	rect.SetMinSize(fyne.NewSize(MIN_WIDTH, 20))
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
+	rect.SetMinSize(fyne.NewSize(ui.Width, 20))
+	frame := &iframe{}
 
-	// Containers
 	balanceCenter := container.NewCenter(
 		container.NewVBox(
 			container.NewCenter(
@@ -339,94 +388,376 @@ func layoutDashboard() fyne.CanvasObject {
 		),
 	)
 
-	modeCenter := container.NewCenter(
-		session.ModeText,
+	path := strings.Split(session.Path, string(filepath.Separator))
+	accountName := canvas.NewText(path[len(path)-1], colors.Green)
+	accountName.TextStyle = fyne.TextStyle{Bold: true}
+	accountName.TextSize = 18
+
+	shortAddress := canvas.NewText("····"+short, colors.Gray)
+	shortAddress.TextStyle = fyne.TextStyle{Bold: true}
+	shortAddress.TextSize = 22
+
+	gramSend := widget.NewButton(" Send ", nil)
+
+	heading := canvas.NewText("B A L A N C E", colors.Gray)
+	heading.TextSize = 16
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	sendDesc := canvas.NewText("Add Transfer Details", colors.Gray)
+	sendDesc.TextSize = 18
+	sendDesc.Alignment = fyne.TextAlignCenter
+	sendDesc.TextStyle = fyne.TextStyle{Bold: true}
+
+	sendHeading := canvas.NewText("Send Money", colors.Green)
+	sendHeading.TextSize = 22
+	sendHeading.Alignment = fyne.TextAlignCenter
+	sendHeading.TextStyle = fyne.TextStyle{Bold: true}
+
+	headerLabel := canvas.NewText("  "+network+"  ", colors.Gray)
+	headerLabel.TextSize = 11
+	headerLabel.Alignment = fyne.TextAlignCenter
+	headerLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	statusLabel := canvas.NewText("  S T A T U S  ", colors.Gray)
+	statusLabel.TextSize = 11
+	statusLabel.Alignment = fyne.TextAlignCenter
+	statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	daemonLabel := canvas.NewText("OFFLINE", colors.Gray)
+	daemonLabel.TextSize = 12
+	daemonLabel.Alignment = fyne.TextAlignCenter
+	daemonLabel.TextStyle = fyne.TextStyle{Bold: false}
+
+	if !session.Offline {
+		daemonLabel.Text = session.Daemon
+	}
+
+	session.WalletHeight = engram.Disk.Get_Height()
+	session.StatusText = canvas.NewText(fmt.Sprintf("%d", session.WalletHeight), colors.Gray)
+	session.StatusText.TextSize = 12
+	session.StatusText.Alignment = fyne.TextAlignCenter
+	session.StatusText.TextStyle = fyne.TextStyle{Bold: false}
+
+	menuLabel := canvas.NewText("  M O D U L E S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
 	)
 
-	idCenter := container.NewCenter(
-		shortShard,
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
 	)
 
-	linkCenter := container.NewCenter(
-		cyberdeck.status,
-	)
+	linkLogout := widget.NewHyperlinkWithStyle("Sign Out", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkLogout.OnTapped = func() {
+		closeWallet()
+	}
 
-	vLabel := canvas.NewText(" - ", color.RGBA{R: 255, G: 255, B: 255, A: 255})
-	vLabel.SetMinSize(fyne.NewSize(300, 300))
+	linkHistory := widget.NewHyperlinkWithStyle("View History", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkHistory.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutHistory())
+		removeOverlays()
+	}
 
-	cyberdeck.toggle = widget.NewButton("Turn On", nil)
-	cyberdeck.toggle.OnTapped = func() {
-		if cyberdeck.active == 0 {
-			setRPCLogin()
-			cyberdeck.status.Text = "Allowed"
-			cyberdeck.status.Color = colors.Green
-			cyberdeck.status.Refresh()
-			status.Cyberdeck.FillColor = colors.Green
-			status.Cyberdeck.StrokeColor = colors.Green
-			status.Cyberdeck.Refresh()
-			cyberdeck.toggle.Text = "Turn Off"
-			status.Authenticator.Value = 60
-			status.Authenticator.Refresh()
-			linkCenter.Refresh()
-			cyberdeck.checkbox.Disable()
-			cyberdeck.active = 1
-			go cyberdeckUpdate()
+	menu := widget.NewSelect([]string{"Identity", "My Account", "Messages", "Transfers", "Asset Explorer", "Services", "Cyberdeck", "Datapad", " "}, nil)
+	menu.PlaceHolder = "Select Module ..."
+	menu.OnChanged = func(s string) {
+		if s == "My Account" {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutAccount())
+			removeOverlays()
+		} else if s == "Transfers" {
+			session.Window.Canvas().SetContent(layoutTransition())
+			session.Window.Canvas().SetContent(layoutTransfers())
+			removeOverlays()
+		} else if s == "Asset Explorer" {
+			session.Window.Canvas().SetContent(layoutTransition())
+			session.Window.Canvas().SetContent(layoutAssetExplorer())
+			removeOverlays()
+		} else if s == "Datapad" {
+			session.Window.Canvas().SetContent(layoutTransition())
+			session.Window.Canvas().SetContent(layoutDatapad())
+			removeOverlays()
+		} else if s == "Messages" {
+			session.Window.Canvas().SetContent(layoutTransition())
+			session.Window.Canvas().SetContent(layoutMessages())
+			removeOverlays()
+		} else if s == "Cyberdeck" {
+			session.Window.Canvas().SetContent(layoutTransition())
+			session.Window.Canvas().SetContent(layoutCyberdeck())
+			removeOverlays()
+		} else if s == "Identity" {
+			session.Window.Canvas().SetContent(layoutTransition())
+			session.Window.Canvas().SetContent(layoutIdentity())
+			removeOverlays()
+		} else if s == "Services" {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutServiceAddress())
+			removeOverlays()
 		} else {
-			if cyberdeck.active == 1 && cyberdeck.server != nil {
-				cyberdeck.active = 0
-				cyberdeck.server.RPCServer_Stop()
-				cyberdeck.server = nil
-				cyberdeck.status.Text = "Blocked"
-				cyberdeck.status.Color = colors.Gray
-				cyberdeck.status.Refresh()
-				status.Cyberdeck.FillColor = colors.Gray
-				status.Cyberdeck.Refresh()
-				linkCenter.Refresh()
-				status.Authenticator.Value = 0
-				status.Authenticator.Refresh()
-				cyberdeck.toggle.Text = "Turn On"
-				cyberdeck.checkbox.Enable()
-			}
+			session.Window.Canvas().SetContent(layoutTransition())
+			session.Window.Canvas().SetContent(layoutDashboard())
+			removeOverlays()
 		}
 	}
 
-	btnSend := widget.NewButton("Save", nil)
-	//btnSendNow := widget.NewButton(" Send ", nil)
+	rectList := canvas.NewRectangle(color.Transparent)
+	rectList.SetMinSize(fyne.NewSize(ui.Width, 260))
 
-	btnCopyLogin := widget.NewButton("Copy", func() {
-		session.Window.Clipboard().SetContent(cyberdeck.user + ":" + cyberdeck.pass)
+	rect300 := canvas.NewRectangle(color.Transparent)
+	rect300.SetMinSize(fyne.NewSize(ui.Width, 50))
+
+	rect.SetMinSize(fyne.NewSize(ui.Width, 30))
+
+	res.gram.SetMinSize(fyne.NewSize(ui.Width, 150))
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
+
+	deroForm := container.NewVBox(
+		rectSpacer,
+		res.gram,
+		rectSpacer,
+		container.NewStack(
+			container.NewHBox(
+				line1,
+				layout.NewSpacer(),
+				headerLabel,
+				layout.NewSpacer(),
+				line2,
+			),
+		),
+		rectSpacer,
+		rectSpacer,
+		heading,
+		rectSpacer,
+		balanceCenter,
+		rectSpacer,
+		rectSpacer,
+		gramSend,
+		rectSpacer,
+		container.NewHBox(
+			layout.NewSpacer(),
+			linkHistory,
+			layout.NewSpacer(),
+		),
+		rectSpacer,
+		rectSpacer,
+		container.NewHBox(
+			line1,
+			layout.NewSpacer(),
+			menuLabel,
+			layout.NewSpacer(),
+			line2,
+		),
+		rectSpacer,
+		rectSpacer,
+		menu,
+		rectSpacer,
+		rectSpacer,
+		container.NewHBox(
+			line1,
+			layout.NewSpacer(),
+			statusLabel,
+			layout.NewSpacer(),
+			line2,
+		),
+		rectSpacer,
+		rectSpacer,
+		container.NewHBox(
+			container.NewStack(
+				rectStatus,
+				status.Connection,
+			),
+			rectSpacer,
+			daemonLabel,
+			layout.NewSpacer(),
+			container.NewStack(
+				rectStatus,
+				status.Sync,
+			),
+			rectSpacer,
+			session.StatusText,
+		),
+	)
+
+	grid := container.NewCenter(
+		deroForm,
+	)
+
+	gramSend.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutSend())
+		removeOverlays()
+	}
+
+	session.Window.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
+		if session.Domain != "app.wallet" {
+			return
+		}
+
+		if k.Name == fyne.KeyRight {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutCyberdeck())
+			removeOverlays()
+		} else if k.Name == fyne.KeyLeft {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutIdentity())
+			removeOverlays()
+		} else if k.Name == fyne.KeyUp {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutTransfers())
+			removeOverlays()
+		} else if k.Name == fyne.KeyDown {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutMessages())
+			removeOverlays()
+		}
+
 	})
+
+	top := container.NewCenter(
+		layout.NewSpacer(),
+		grid,
+		layout.NewSpacer(),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			container.NewHBox(
+				layout.NewSpacer(),
+				container.NewHBox(
+					layout.NewSpacer(),
+					linkLogout,
+					layout.NewSpacer(),
+				),
+				layout.NewSpacer(),
+			),
+			wSpacer,
+		),
+	)
+
+	c := container.NewBorder(
+		top,
+		bottom,
+		nil,
+		nil,
+	)
+
+	layout := container.NewStack(
+		frame,
+		c,
+	)
+
+	return layout
+}
+
+func layoutSend() fyne.CanvasObject {
+	// Reset UI resources
+	resetResources()
+	session.Domain = "app.send"
+
+	wSpacer := widget.NewLabel(" ")
+	frame := &iframe{}
+
+	btnSend := widget.NewButton("Save", nil)
+
+	wAmount := widget.NewEntry()
+	wMessage := widget.NewEntry()
+	wPaymentID := widget.NewEntry()
+
+	options := []string{"Anonymity Set:   2  (None)", "Anonymity Set:   4  (Low)", "Anonymity Set:   8  (Low)", "Anonymity Set:   16  (Recommended)", "Anonymity Set:   32  (Medium)", "Anonymity Set:   64  (High)", "Anonymity Set:   128  (High)"}
+	wRings := widget.NewSelect(options, nil)
 
 	wReceiver := widget.NewEntry()
 	wReceiver.Validator = func(s string) error {
 		address, err := globals.ParseValidateAddress(s)
 		if err != nil {
 			tx.Address = nil
-			go func() {
-				exists, addr, err := checkUsername(s)
-				if err != nil && !exists {
-					btnSend.Disable()
-					//btnSendNow.Disable()
-					wReceiver.SetValidationError(errors.New("invalid username or address"))
-					tx.Address = nil
-				} else {
-					wReceiver.SetValidationError(nil)
-					tx.Address, _ = globals.ParseValidateAddress(addr)
-					if tx.Amount != 0 {
-						balance, _ := engram.Disk.Get_Balance()
-						if tx.Amount <= balance {
-							btnSend.Enable()
-						}
+			_, addr, _ := checkUsername(s, -1)
+			if addr == "" {
+				btnSend.Disable()
+				err = errors.New("invalid username or address")
+				wReceiver.SetValidationError(err)
+				tx.Address = nil
+				return err
+			} else {
+				wReceiver.SetValidationError(nil)
+				tx.Address, _ = globals.ParseValidateAddress(addr)
+				if tx.Amount != 0 {
+					balance, _ := engram.Disk.Get_Balance()
+					if tx.Amount <= balance {
+						btnSend.Enable()
 					}
 				}
-			}()
+			}
 		} else {
-			tx.Address = address
-			wReceiver.SetValidationError(nil)
-			if tx.Amount != 0 {
-				balance, _ := engram.Disk.Get_Balance()
-				if tx.Amount <= balance {
-					btnSend.Enable()
+			if address.IsIntegratedAddress() {
+				tx.Address = address
+
+				if address.Arguments.HasValue(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64) {
+					amount := address.Arguments[address.Arguments.Index(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64)].Value
+					tx.Amount = amount.(uint64)
+					wAmount.Text = globals.FormatMoney(amount.(uint64))
+					if amount.(uint64) != 0.00000 {
+						wAmount.Disable()
+					}
+					wAmount.Refresh()
+				}
+
+				if address.Arguments.HasValue(rpc.RPC_DESTINATION_PORT, rpc.DataUint64) {
+					port := address.Arguments[address.Arguments.Index(rpc.RPC_DESTINATION_PORT, rpc.DataUint64)].Value
+					tx.PaymentID = port.(uint64)
+					wPaymentID.Text = strconv.FormatUint(port.(uint64), 10)
+					wPaymentID.Disable()
+					wPaymentID.Refresh()
+				}
+
+				if address.Arguments.HasValue(rpc.RPC_COMMENT, rpc.DataString) {
+					comment := address.Arguments[address.Arguments.Index(rpc.RPC_COMMENT, rpc.DataString)].Value
+					tx.Comment = comment.(string)
+					wMessage.Text = comment.(string)
+					if comment.(string) != "" {
+						wMessage.Disable()
+					}
+					wMessage.Refresh()
+				}
+
+				if tx.Ringsize == 0 {
+					wRings.SetSelected("Anonymity Set:   16  (Recommended)")
+				} else {
+
+				}
+
+				if tx.Amount != 0 {
+					balance, _ := engram.Disk.Get_Balance()
+					if tx.Amount <= balance {
+						btnSend.Enable()
+					}
+				}
+			} else {
+				tx.Address = address
+				wReceiver.SetValidationError(nil)
+				if tx.Amount != 0 {
+					balance, _ := engram.Disk.Get_Balance()
+					if tx.Amount <= balance {
+						btnSend.Enable()
+					}
 				}
 			}
 		}
@@ -434,15 +765,242 @@ func layoutDashboard() fyne.CanvasObject {
 	}
 
 	wReceiver.SetPlaceHolder("Receiver username or address")
-	wReceiver.OnChanged = func(s string) {
-		address, err := globals.ParseValidateAddress(s)
-		if err != nil {
-			wReceiver.SetValidationError(errors.New("invalid username or address"))
-			return
+	wReceiver.SetValidationError(nil)
+
+	wAmount.SetPlaceHolder("Amount")
+
+	wMessage.SetPlaceHolder("Message")
+	wMessage.OnChanged = func(s string) {
+		bytes := []byte(s)
+		if len(bytes) <= 130 {
+			tx.Comment = s
+		}
+		wMessage.SetText(tx.Comment)
+	}
+
+	/*
+		wAll := widget.NewCheck(" All", func(b bool) {
+			if b {
+				tx.Amount = engram.Disk.GetAccount().Balance_Mature
+				wAmount.SetText(walletapi.FormatMoney(tx.Amount))
+			} else {
+				tx.Amount = 0
+				wAmount.SetText("")
+			}
+		})
+	*/
+
+	wAmount.Validator = func(s string) error {
+		if s == "" {
+			tx.Amount = 0
+			wAmount.SetValidationError(errors.New("Invalid transaction amount"))
+			btnSend.Disable()
 		} else {
-			tx.Address = address
+			balance, _ := engram.Disk.Get_Balance()
+			entry, err := globals.ParseAmount(s)
+			if err != nil {
+				tx.Amount = 0
+				wAmount.SetValidationError(errors.New("Invalid transaction amount"))
+				btnSend.Disable()
+				return errors.New("Invalid transaction amount")
+			}
+			if entry <= balance {
+				tx.Amount = entry
+				wAmount.SetValidationError(nil)
+				if wReceiver.Validate() == nil {
+					btnSend.Enable()
+				}
+			} else {
+				tx.Amount = 0
+				btnSend.Disable()
+				wAmount.SetValidationError(errors.New("Insufficient funds"))
+			}
+			return nil
+		}
+		return errors.New("Invalid transaction amount")
+	}
+
+	wAmount.SetValidationError(nil)
+
+	var err error
+
+	wPaymentID.OnChanged = func(s string) {
+		tx.PaymentID, err = strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			tx.PaymentID = 0
 		}
 	}
+	wPaymentID.SetPlaceHolder("Payment ID / Service Port")
+
+	wRings.PlaceHolder = "(Select Anonymity Set)"
+	wRings.OnChanged = func(s string) {
+		regex := regexp.MustCompile("[0-9]+")
+		result := regex.FindAllString(s, -1)
+		tx.Ringsize, err = strconv.ParseUint(result[0], 10, 64)
+		if err != nil {
+			tx.Ringsize = 16
+			wRings.SetSelected(options[3])
+		}
+		session.Window.Canvas().Focus(wReceiver)
+	}
+
+	btnSend.OnTapped = func() {
+		_, err := globals.ParseAmount(wAmount.Text)
+		if tx.Address != nil {
+			if wRings != nil && err == nil && tx.Address != nil {
+				err = addTransfer()
+				if err == nil {
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutTransfers())
+					removeOverlays()
+				}
+			} else {
+				wReceiver.SetValidationError(errors.New("Invalid Address"))
+				wReceiver.Refresh()
+			}
+		}
+	}
+
+	sendHeading := canvas.NewText("Send Money", colors.Green)
+	sendHeading.TextSize = 22
+	sendHeading.Alignment = fyne.TextAlignCenter
+	sendHeading.TextStyle = fyne.TextStyle{Bold: true}
+
+	optionalLabel := canvas.NewText("  O P T I O N A L  ", colors.Gray)
+	optionalLabel.TextSize = 11
+	optionalLabel.Alignment = fyne.TextAlignCenter
+	optionalLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkCancel := widget.NewHyperlinkWithStyle("Cancel", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+
+	rectList := canvas.NewRectangle(color.Transparent)
+	rectList.SetMinSize(fyne.NewSize(ui.Width, 260))
+
+	rect300 := canvas.NewRectangle(color.Transparent)
+	rect300.SetMinSize(fyne.NewSize(ui.Width, 30))
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
+
+	form := container.NewVBox(
+		wSpacer,
+		container.NewCenter(
+			rect300,
+			sendHeading,
+		),
+		wSpacer,
+		wRings,
+		rectSpacer,
+		wReceiver,
+		wAmount,
+		rectSpacer,
+		rectSpacer,
+		container.NewHBox(
+			line1,
+			layout.NewSpacer(),
+			optionalLabel,
+			layout.NewSpacer(),
+			line2,
+		),
+		rectSpacer,
+		rectSpacer,
+		wPaymentID,
+		wMessage,
+		wSpacer,
+	)
+
+	grid := container.NewCenter(
+		form,
+	)
+
+	linkCancel.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
+	}
+
+	top := container.NewCenter(
+		layout.NewSpacer(),
+		grid,
+		layout.NewSpacer(),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			rectSpacer,
+			container.NewHBox(
+				layout.NewSpacer(),
+				container.NewStack(
+					rect300,
+					btnSend,
+				),
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			container.NewHBox(
+				layout.NewSpacer(),
+				container.NewHBox(
+					layout.NewSpacer(),
+					linkCancel,
+					layout.NewSpacer(),
+				),
+				layout.NewSpacer(),
+			),
+			wSpacer,
+		),
+	)
+
+	c := container.NewBorder(
+		top,
+		bottom,
+		nil,
+		nil,
+	)
+
+	layout := container.NewStack(
+		frame,
+		c,
+	)
+
+	return layout
+}
+
+func layoutServiceAddress() fyne.CanvasObject {
+	resetResources()
+	session.Domain = "app.service"
+
+	wSpacer := widget.NewLabel(" ")
+	frame := &iframe{}
+
+	btnCreate := widget.NewButton("Create", nil)
+
+	wPaymentID := widget.NewEntry()
+
+	wReceiver := widget.NewEntry()
+	wReceiver.Text = engram.Disk.GetAddress().String()
+	wReceiver.Disable()
+
+	tx.Address, _ = globals.ParseValidateAddress(engram.Disk.GetAddress().String())
+
+	wReceiver.SetPlaceHolder("Receiver username or address")
 	wReceiver.SetValidationError(nil)
 
 	wAmount := widget.NewEntry()
@@ -458,45 +1016,23 @@ func layoutDashboard() fyne.CanvasObject {
 		wMessage.SetText(tx.Comment)
 	}
 
-	wAll := widget.NewCheck(" All", func(b bool) {
-		if b {
-			tx.Amount = engram.Disk.GetAccount().Balance_Mature
-			wAmount.SetText(walletapi.FormatMoney(tx.Amount))
-		} else {
-			tx.Amount = 0
-			wAmount.SetText("")
-		}
-	})
-
 	wAmount.Validator = func(s string) error {
 		if s == "" {
 			tx.Amount = 0
 			wAmount.SetValidationError(errors.New("Invalid transaction amount"))
-			btnSend.Disable()
-			//btnSendNow.Disable()
+			btnCreate.Disable()
 		} else {
-			balance, _ := engram.Disk.Get_Balance()
-			entry, err := globals.ParseAmount(s)
+			amount, err := globals.ParseAmount(s)
 			if err != nil {
 				tx.Amount = 0
 				wAmount.SetValidationError(errors.New("Invalid transaction amount"))
-				btnSend.Disable()
-				//btnSendNow.Disable()
+				btnCreate.Disable()
 				return errors.New("Invalid transaction amount")
 			}
-			if entry <= balance {
-				tx.Amount = entry
-				wAmount.SetValidationError(nil)
-				if wReceiver.Validate() == nil {
-					btnSend.Enable()
-					//btnSendNow.Enable()
-				}
-			} else {
-				tx.Amount = 0
-				btnSend.Disable()
-				//btnSendNow.Disable()
-				wAmount.SetValidationError(errors.New("Insufficient funds"))
-			}
+			wAmount.SetValidationError(nil)
+			tx.Amount = amount
+			btnCreate.Enable()
+
 			return nil
 		}
 		return errors.New("Invalid transaction amount")
@@ -506,748 +1042,246 @@ func layoutDashboard() fyne.CanvasObject {
 
 	var err error
 
-	wPaymentID := widget.NewEntry()
 	wPaymentID.OnChanged = func(s string) {
 		tx.PaymentID, err = strconv.ParseUint(s, 10, 64)
 		if err != nil {
 			tx.PaymentID = 0
+			btnCreate.Disable()
+		} else {
+			if wReceiver.Text != "" {
+				btnCreate.Enable()
+			}
 		}
 	}
 	wPaymentID.SetPlaceHolder("Payment ID / Service Port")
 
-	options := []string{"2", "4", "8", "16", "32", "64", "128", "256"}
-	wRings := widget.NewSelect(options, nil)
-	wRings.PlaceHolder = "(Select Anonymity Set)"
-	wRings.OnChanged = func(s string) {
-		tx.Ringsize, _ = strconv.ParseUint(s, 10, 64)
-		session.Window.Canvas().Focus(wReceiver)
-	}
-
-	rect.SetMinSize(fyne.NewSize(300, 30))
-	rectSynapse := canvas.NewRectangle(color.Transparent)
-	rectSynapse.SetMinSize(fyne.NewSize(75, 75))
-	rectSpacer := canvas.NewRectangle(color.Transparent)
-	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
-	rectCenter := canvas.NewRectangle(colors.DarkMatter)
-	rectCenter.FillColor = colors.Green
-	rect.SetMinSize(fyne.NewSize(10, 10))
-	rectUp := canvas.NewRectangle(colors.DarkMatter)
-	rect.SetMinSize(fyne.NewSize(10, 10))
-	rectDown := canvas.NewRectangle(colors.DarkMatter)
-	rect.SetMinSize(fyne.NewSize(10, 10))
-	rectLeft := canvas.NewRectangle(colors.DarkMatter)
-	rect.SetMinSize(fyne.NewSize(10, 10))
-	rectRight := canvas.NewRectangle(colors.DarkMatter)
-	rectRight.SetMinSize(fyne.NewSize(10, 10))
-	rectEmpty := canvas.NewRectangle(color.Transparent)
-	rectEmpty.SetMinSize(fyne.NewSize(10, 10))
-
-	btnSend.OnTapped = func() {
-		var arguments = rpc.Arguments{}
-
-		fmt.Printf("[Send] Starting tx...\n")
-		if tx.Address.IsIntegratedAddress() {
-			if tx.Address.Arguments.Validate_Arguments() != nil {
-				fmt.Printf("[Service] Integrated Address arguments could not be validated.")
-				return
-			}
-
-			fmt.Printf("[Send] Not Integrated..\n")
-			if !tx.Address.Arguments.Has(rpc.RPC_DESTINATION_PORT, rpc.DataUint64) {
-				fmt.Printf("[Service] Integrated Address does not contain destination port.")
-				return
-			}
-
-			arguments = append(arguments, rpc.Argument{Name: rpc.RPC_DESTINATION_PORT, DataType: rpc.DataUint64, Value: tx.Address.Arguments.Value(rpc.RPC_DESTINATION_PORT, rpc.DataUint64).(uint64)})
-			fmt.Printf("[Send] Added arguments..\n")
-
-			if tx.Address.Arguments.Has(rpc.RPC_EXPIRY, rpc.DataTime) {
-
-				if tx.Address.Arguments.Value(rpc.RPC_EXPIRY, rpc.DataTime).(time.Time).Before(time.Now().UTC()) {
-					fmt.Printf("[Service] This address has expired.", "expiry time", tx.Address.Arguments.Value(rpc.RPC_EXPIRY, rpc.DataTime))
-					return
-				} else {
-					fmt.Printf("[Service] This address will expire ", "expiry time", tx.Address.Arguments.Value(rpc.RPC_EXPIRY, rpc.DataTime))
-					return
-				}
-			}
-
-			fmt.Printf("[Service] Destination port is integrated in address.", "dst port", tx.Address.Arguments.Value(rpc.RPC_DESTINATION_PORT, rpc.DataUint64).(uint64))
-
-			if tx.Address.Arguments.Has(rpc.RPC_COMMENT, rpc.DataString) {
-				fmt.Printf("[Service] Integrated Message", "comment", tx.Address.Arguments.Value(rpc.RPC_COMMENT, rpc.DataString))
-				arguments = append(arguments, rpc.Argument{rpc.RPC_COMMENT, rpc.DataString, tx.Address.Arguments.Value(rpc.RPC_COMMENT, rpc.DataString)})
-			}
-		}
-
-		fmt.Printf("[Send] Checking arguments..\n")
-
-		for _, arg := range tx.Address.Arguments {
-			if !(arg.Name == rpc.RPC_COMMENT || arg.Name == rpc.RPC_EXPIRY || arg.Name == rpc.RPC_DESTINATION_PORT || arg.Name == rpc.RPC_SOURCE_PORT || arg.Name == rpc.RPC_VALUE_TRANSFER || arg.Name == rpc.RPC_NEEDS_REPLYBACK_ADDRESS) {
-				switch arg.DataType {
-				case rpc.DataString:
-					arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
-				case rpc.DataInt64:
-					arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
-				case rpc.DataUint64:
-					arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
-				case rpc.DataFloat64:
-					arguments = append(arguments, rpc.Argument{Name: arg.Name, DataType: arg.DataType, Value: arg.Value.(string)})
-				case rpc.DataTime:
-					fmt.Errorf("[Service] Time currently not supported.\n")
-				}
-			}
-		}
-
-		fmt.Printf("[Send] Checking Amount..\n")
-
-		if tx.Address.Arguments.Has(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64) {
-			fmt.Printf("[Service] Transaction amount: %x", globals.FormatMoney(tx.Address.Arguments.Value(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64).(uint64)))
-			tx.Amount = tx.Address.Arguments.Value(rpc.RPC_VALUE_TRANSFER, rpc.DataUint64).(uint64)
-		} else {
-			balance, _ := engram.Disk.Get_Balance()
-			fmt.Printf("[Send] Balance: %d\n", balance)
-			fmt.Printf("[Send] Amount: %d\n", tx.Amount)
-
-			if tx.Amount > balance {
-				fmt.Printf("[Send] Error: Insufficient funds")
-				return
-			} else if tx.Amount == balance {
-				tx.SendAll = true
-			} else {
-				tx.SendAll = false
-			}
-		}
-
-		fmt.Printf("[Send] Checking services..\n")
-
-		if tx.Address.Arguments.Has(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataUint64) {
-			arguments = append(arguments, rpc.Argument{Name: rpc.RPC_REPLYBACK_ADDRESS, DataType: rpc.DataAddress, Value: engram.Disk.GetAddress()})
-		}
-
-		fmt.Printf("[Send] Checking payment ID/destination port..\n")
-
-		if len(arguments) == 0 {
-			arguments = append(arguments, rpc.Argument{Name: rpc.RPC_DESTINATION_PORT, DataType: rpc.DataUint64, Value: tx.PaymentID})
-			arguments = append(arguments, rpc.Argument{Name: rpc.RPC_COMMENT, DataType: rpc.DataString, Value: tx.Comment})
-		}
-
-		fmt.Printf("[Send] Checking Pack..\n")
-
-		if _, err := arguments.CheckPack(transaction.PAYLOAD0_LIMIT); err != nil {
-			fmt.Printf("[Send] Arguments packing err: %s\n", err)
-			return
-		}
-
-		if tx.Ringsize == 0 {
-			tx.Ringsize = 2
-		} else if tx.Ringsize > 256 {
-			tx.Ringsize = 256
-		} else if !crypto.IsPowerOf2(int(tx.Ringsize)) {
-			tx.Ringsize = 2
-			fmt.Printf("[Send] Error: Invalid ringsize - %d is not a power of 2\n", tx.Ringsize)
-			return
-		}
-
-		//tx.Fees = tx.TX.Fees()
-		tx.Status = "Unsent"
-
-		fmt.Printf("[Send] Ringsize: %d\n", tx.Ringsize)
-
-		addTransfer(arguments)
-	}
-
-	go getPrice()
-
-	shardTitle := canvas.NewText("D A T A S H A R D", colors.Gray)
-	shardTitle.TextStyle = fyne.TextStyle{Bold: true}
-	shardTitle.TextSize = 16
-
-	deckTitle := canvas.NewText("C Y B E R D E C K", colors.Gray)
-	deckTitle.TextStyle = fyne.TextStyle{Bold: true}
-	deckTitle.TextSize = 16
-
-	sendTitle := canvas.NewText("T R A N S F E R", colors.Gray)
-	sendTitle.TextStyle = fyne.TextStyle{Bold: true}
-	sendTitle.TextSize = 16
-
-	nodeTitle := canvas.NewText("H O M E", colors.Gray)
-	nodeTitle.TextStyle = fyne.TextStyle{Bold: true}
-	nodeTitle.TextSize = 16
-
-	path := strings.Split(session.Path, string(filepath.Separator))
-	accountName := canvas.NewText(path[len(path)-1], colors.Green)
-	accountName.TextStyle = fyne.TextStyle{Bold: true}
-	accountName.TextSize = 18
-
-	shardText := canvas.NewText(session.Username, colors.Green)
-	shardText.TextStyle = fyne.TextStyle{Bold: true}
-	shardText.TextSize = 22
-
-	shortAddress := canvas.NewText("····"+short, colors.Gray)
-	shortAddress.TextStyle = fyne.TextStyle{Bold: true}
-	shortAddress.TextSize = 22
-
-	cyberdeck.checkbox = widget.NewCheck("Use Authenticator", nil)
-	cyberdeck.checkbox.OnChanged = func(b bool) {
-		if b {
-			cyberdeck.mode = 1
-			setAuthMode("true")
-			cyberdeck.userText.Disable()
-			cyberdeck.passText.Disable()
-		} else {
-			cyberdeck.mode = 0
-			setAuthMode("false")
-			cyberdeck.userText.Enable()
-			cyberdeck.passText.Enable()
-		}
-	}
-
-	cyberdeck.userText = widget.NewEntry()
-	cyberdeck.userText.PlaceHolder = "Username"
-	cyberdeck.userText.OnChanged = func(s string) {
-		if len(s) > 1 {
-			cyberdeck.user = s
-		}
-	}
-
-	cyberdeck.passText = widget.NewEntry()
-	cyberdeck.passText.PlaceHolder = "Password"
-	cyberdeck.passText.OnChanged = func(s string) {
-		if len(s) > 1 {
-			cyberdeck.pass = s
-		}
-	}
-
-	status.Authenticator = widget.NewProgressBar()
-	status.Authenticator.Max = 60
-	status.Authenticator.Min = 0
-	status.Authenticator.Value = 60
-	status.Authenticator.TextFormatter = func() string {
-		return ""
-	}
-
-	if cyberdeck.mode == 1 {
-		cyberdeck.checkbox.Checked = true
-		cyberdeck.userText.Disable()
-		cyberdeck.passText.Disable()
-	} else {
-		cyberdeck.checkbox.Checked = false
-		cyberdeck.userText.Enable()
-		cyberdeck.passText.Enable()
-	}
-
-	authRect := canvas.NewRectangle(color.Transparent)
-	authRect.SetMinSize(fyne.NewSize(300, 3))
-
-	gramSend := widget.NewButton(" Send ", nil)
-	gramManage := widget.NewButton(" My Account ", nil)
-	gramManage.OnTapped = func() {
-
-		session.Window.SetContent(layoutTransition())
-		session.Window.SetContent(layoutAccount())
-	}
-
-	entryReg := widget.NewEntry()
-
-	btnReg := widget.NewButton(" Register ", nil)
-	btnReg.Disable()
-	btnReg.OnTapped = func() {
-		if len(session.NewUser) > 5 {
-			_, _, err := checkUsername(session.NewUser)
-			if err != nil {
-				err = registerUsername(session.NewUser)
-				if err != nil {
-					btnReg.Enable()
-				} else {
-					btnReg.Disable()
-					session.NewUser = ""
-					entryReg.Text = ""
-					entryReg.Refresh()
-				}
-			}
-		}
-	}
-
-	entryReg.PlaceHolder = "New Username"
-	entryReg.OnChanged = func(s string) {
-		session.NewUser = s
-		if len(s) > 5 {
-			_, _, err := checkUsername(s)
-			if err != nil {
-				btnReg.Enable()
-			} else {
-				btnReg.Disable()
-			}
-		} else {
-			btnReg.Disable()
-		}
-	}
-
-	btnClose := widget.NewButton(" Log Out ", func() {
-		closeWallet()
-	})
-
-	btnCancel := widget.NewButton(" Cancel ", nil)
-
-	heading := canvas.NewText("Balance", colors.Gray)
-	heading.TextSize = 22
-	heading.Alignment = fyne.TextAlignCenter
-	heading.TextStyle = fyne.TextStyle{Bold: true}
-
-	sendDesc := canvas.NewText("Add Transfer Details", colors.Gray)
-	sendDesc.TextSize = 18
-	sendDesc.Alignment = fyne.TextAlignCenter
-	sendDesc.TextStyle = fyne.TextStyle{Bold: true}
-
-	sendHeading := canvas.NewText("Send Money", colors.Green)
+	sendHeading := canvas.NewText("New Service Address", colors.Green)
 	sendHeading.TextSize = 22
 	sendHeading.Alignment = fyne.TextAlignCenter
 	sendHeading.TextStyle = fyne.TextStyle{Bold: true}
 
-	serverStatus := canvas.NewText("APPLICATION  CONNECTIONS", colors.Gray)
-	serverStatus.TextSize = 12
-	serverStatus.Alignment = fyne.TextAlignCenter
-	serverStatus.TextStyle = fyne.TextStyle{Bold: true}
+	optionalLabel := canvas.NewText("  O P T I O N A L  ", colors.Gray)
+	optionalLabel.TextSize = 11
+	optionalLabel.Alignment = fyne.TextAlignCenter
+	optionalLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	res.gram.SetMinSize(fyne.NewSize(300, 185))
-	res.gram_footer.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_header.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.home_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.nft_footer.SetMinSize(fyne.NewSize(300, 20))
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkCancel := widget.NewHyperlinkWithStyle("Cancel", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 
 	rectList := canvas.NewRectangle(color.Transparent)
-	rectList.SetMinSize(fyne.NewSize(300, 200))
+	rectList.SetMinSize(fyne.NewSize(ui.Width, 260))
 
-	userData, err := queryUsernames()
-	if err != nil {
+	rect300 := canvas.NewRectangle(color.Transparent)
+	rect300.SetMinSize(fyne.NewSize(ui.Width, 30))
 
-	}
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
 
-	userList := binding.BindStringList(&userData)
-
-	userBox := widget.NewListWithData(userList,
-		func() fyne.CanvasObject {
-			c := container.NewVBox(
-				widget.NewLabel(""),
-			)
-			return c
-		},
-		func(di binding.DataItem, co fyne.CanvasObject) {
-			dat := di.(binding.String)
-			str, err := dat.Get()
-			if err != nil {
-				return
+	btnCreate.OnTapped = func() {
+		var err error
+		if tx.Address != nil && tx.PaymentID != 0 {
+			if wAmount.Text != "" {
+				_, err = globals.ParseAmount(wAmount.Text)
 			}
 
-			co.(*fyne.Container).Objects[0].(*widget.Label).SetText(str)
-			co.(*fyne.Container).Objects[0].(*widget.Label).Wrapping = fyne.TextWrapWord
-			co.(*fyne.Container).Objects[0].(*widget.Label).TextStyle.Bold = false
-			co.(*fyne.Container).Objects[0].(*widget.Label).Alignment = fyne.TextAlignLeading
-		})
+			if err == nil {
+				header := canvas.NewText("CREATE  SERVICE  ADDRESS", colors.Gray)
+				header.TextSize = 14
+				header.Alignment = fyne.TextAlignCenter
+				header.TextStyle = fyne.TextStyle{Bold: true}
 
-	userBox.OnSelected = func(id widget.ListItemID) {
-		setPrimaryUsername(userData[id])
-		session.Username = userData[id]
-		shardText.Text = userData[id]
-		shardText.Refresh()
-	}
+				subHeader := canvas.NewText("Successfully Created", colors.Account)
+				subHeader.TextSize = 22
+				subHeader.Alignment = fyne.TextAlignCenter
+				subHeader.TextStyle = fyne.TextStyle{Bold: true}
 
-	getPrimaryUsername()
+				labelAddress := canvas.NewText("-------------    INTEGRATED  ADDRESS    -------------", colors.Gray)
+				labelAddress.TextSize = 12
+				labelAddress.Alignment = fyne.TextAlignCenter
+				labelAddress.TextStyle = fyne.TextStyle{Bold: true}
 
-	if session.Username == "" {
-		shardText.Text = "---"
-		shardText.Refresh()
-	} else {
-		for u := range userData {
-			if userData[u] == session.Username {
-				userBox.Select(u)
-				userBox.ScrollTo(u)
+				btnCopy := widget.NewButton("Copy Service Address", nil)
+
+				valueAddress := widget.NewRichTextFromMarkdown("")
+				valueAddress.Wrapping = fyne.TextWrapBreak
+
+				address := engram.Disk.GetRandomIAddress8()
+				address.Arguments = nil
+				address.Arguments = append(address.Arguments, rpc.Argument{Name: rpc.RPC_NEEDS_REPLYBACK_ADDRESS, DataType: rpc.DataUint64, Value: uint64(1)})
+				address.Arguments = append(address.Arguments, rpc.Argument{Name: rpc.RPC_VALUE_TRANSFER, DataType: rpc.DataUint64, Value: tx.Amount})
+				address.Arguments = append(address.Arguments, rpc.Argument{Name: rpc.RPC_DESTINATION_PORT, DataType: rpc.DataUint64, Value: tx.PaymentID})
+				address.Arguments = append(address.Arguments, rpc.Argument{Name: rpc.RPC_COMMENT, DataType: rpc.DataString, Value: tx.Comment})
+
+				err := address.Arguments.Validate_Arguments()
+				if err != nil {
+					fmt.Printf("[Service Address] Error: %s\n", err)
+					subHeader.Text = "Error"
+					subHeader.Refresh()
+					btnCopy.Disable()
+				} else {
+					fmt.Printf("[Service Address] New Integrated Address: %s\n", address.String())
+					fmt.Printf("[Service Address] Arguments: %s\n", address.Arguments)
+
+					valueAddress.ParseMarkdown("" + address.String())
+					valueAddress.Refresh()
+				}
+
+				btnCopy.OnTapped = func() {
+					session.Window.Clipboard().SetContent(address.String())
+				}
+
+				linkClose := widget.NewHyperlinkWithStyle("Go Back", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+				linkClose.OnTapped = func() {
+					overlay := session.Window.Canvas().Overlays()
+					overlay.Top().Hide()
+					overlay.Remove(overlay.Top())
+					overlay.Remove(overlay.Top())
+				}
+
+				span := canvas.NewRectangle(color.Transparent)
+				span.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+				overlay := session.Window.Canvas().Overlays()
+
+				overlay.Add(
+					container.NewStack(
+						&iframe{},
+						canvas.NewRectangle(colors.DarkMatter),
+					),
+				)
+
+				overlay.Add(
+					container.NewStack(
+						&iframe{},
+						container.NewCenter(
+							container.NewVBox(
+								span,
+								container.NewCenter(
+									header,
+								),
+								rectSpacer,
+								rectSpacer,
+								subHeader,
+								rectSpacer,
+								rectSpacer,
+								rectSpacer,
+								labelAddress,
+								rectSpacer,
+								valueAddress,
+								rectSpacer,
+								rectSpacer,
+								btnCopy,
+								rectSpacer,
+								rectSpacer,
+								container.NewHBox(
+									layout.NewSpacer(),
+									linkClose,
+									layout.NewSpacer(),
+								),
+								rectSpacer,
+								rectSpacer,
+							),
+						),
+					),
+				)
+			} else {
+				wReceiver.SetValidationError(errors.New("Invalid Address"))
+				wReceiver.Refresh()
 			}
 		}
 	}
 
-	synapse := container.NewMax(
-		rectSynapse,
-		container.NewGridWithColumns(3,
-			rectEmpty,
-			rectUp,
-			rectEmpty,
-			rectLeft,
-			rectCenter,
-			rectRight,
-			rectEmpty,
-			rectDown,
-			rectEmpty,
-		),
-	)
-
-	deroForm := container.NewVBox(
-		wSpacer,
-		res.gram,
-		heading,
-		rectSpacer,
-		balanceCenter,
-		wSpacer,
-		gramSend,
-		gramManage,
-		btnClose,
+	form := container.NewVBox(
 		wSpacer,
 		container.NewCenter(
-			res.gram_footer,
-			container.NewVBox(
-				rectSpacer,
-				modeCenter,
-			),
-		),
-	)
-
-	deckForm := container.NewVBox(
-		wSpacer,
-		container.NewCenter(
-			res.rpc_header,
-			container.NewVBox(
-				deckTitle,
-				rectSpacer,
-			),
-		),
-		rectSpacer,
-		linkCenter,
-		rectSpacer,
-		serverStatus,
-		wSpacer,
-		cyberdeck.toggle,
-		wSpacer,
-		cyberdeck.userText,
-		rectSpacer,
-		cyberdeck.passText,
-		rectSpacer,
-		cyberdeck.checkbox,
-		wSpacer,
-		rectSpacer,
-		container.NewMax(
-			status.Authenticator,
-			container.NewMax(
-				btnCopyLogin,
-			),
+			rect300,
+			sendHeading,
 		),
 		wSpacer,
-		res.rpc_footer,
-	)
-
-	sendForm := container.NewVBox(
-		wSpacer,
-		container.NewCenter(res.rpc_header, container.NewVBox(sendTitle, rectSpacer)),
-		rectSpacer,
-		sendHeading,
-		//rectSpacer,
-		//sendDesc,
-		wSpacer,
-		wRings,
 		wReceiver,
-		wAmount,
-		//wAll,
 		wPaymentID,
+		rectSpacer,
+		rectSpacer,
+		container.NewHBox(
+			line1,
+			layout.NewSpacer(),
+			optionalLabel,
+			layout.NewSpacer(),
+			line2,
+		),
+		rectSpacer,
+		rectSpacer,
+		wAmount,
 		wMessage,
 		wSpacer,
-		//btnSendNow,
-		wSpacer,
-		btnSend,
-		btnCancel,
-		wSpacer,
-		res.rpc_footer,
 	)
 
-	shardForm := container.NewVBox(
-		wSpacer,
-		container.NewCenter(res.rpc_header, container.NewVBox(shardTitle, rectSpacer)),
-		rectSpacer,
-		container.NewMax(container.NewCenter(shardText)),
-		rectSpacer,
-		idCenter,
-		wSpacer,
-		container.NewMax(
-			rectList,
-			userBox,
-		),
-		rectSpacer,
-		widget.NewSeparator(),
-		rectSpacer,
-		entryReg,
-		rectSpacer,
-		btnReg,
-		wSpacer,
-		res.rpc_footer,
+	grid := container.NewCenter(
+		form,
 	)
 
-	gridItem2 := container.NewCenter(
-		deroForm,
-	)
-
-	gridItem3 := container.NewCenter(
-		deckForm,
-	)
-
-	gridItem1 := container.NewCenter(
-		shardForm,
-	)
-
-	gridItem4 := container.NewCenter(
-		sendForm,
-	)
-
-	gridItem1.Hidden = true
-	gridItem2.Hidden = false
-	gridItem3.Hidden = true
-	gridItem4.Hidden = true
-
-	gramSend.OnTapped = func() {
-		rectCenter.FillColor = colors.Blue
-		rectCenter.Refresh()
-		gridItem1.Hidden = true
-		gridItem2.Hidden = true
-		gridItem3.Hidden = true
-		gridItem4.Hidden = false
+	linkCancel.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
 	}
 
-	btnCancel.OnTapped = func() {
-		//tx = Transfers{}
-		rectCenter.FillColor = colors.Green
-		rectCenter.Refresh()
-		gridItem1.Hidden = true
-		gridItem2.Hidden = false
-		gridItem3.Hidden = true
-		gridItem4.Hidden = true
-		wReceiver.SetText("")
-		wPaymentID.SetText("")
-		wAmount.SetText("")
-		wAll.SetChecked(false)
-		wMessage.SetText("")
-		wRings.ClearSelected()
-		sendForm.Refresh()
-	}
-
-	status.Daemon = newImageButton(resourceDaemonOffPng, nil)
-	status.Daemon.OnTapped = func() {
-		// Maybe GUI for daemon?
-	}
-
-	if node.Active == 0 {
-		status.Daemon.Image.Resource = resourceDaemonOffPng
-		status.Daemon.Refresh()
-	} else {
-		status.Daemon.Image.Resource = resourceDaemonOnPng
-		status.Daemon.Refresh()
-	}
-
-	status.Netrunner = newImageButton(resourceMinerOffPng, nil)
-	status.Netrunner.OnTapped = func() {
-		if nr.Mission == 1 || miner.Window != nil {
-			miner.Window.Show()
-			miner.Window.RequestFocus()
-			return
-		}
-		miner.Window = appl.NewWindow("Netrunner")
-		miner.Window.SetPadded(false)
-		miner.Window.CenterOnScreen()
-		miner.Window.SetIcon(resourceMinerOnPng)
-		miner.Window.Resize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
-		miner.Window.SetFixedSize(true)
-		miner.Window.SetCloseIntercept(func() {
-			if nr.Mission == 1 {
-				nr.Mission = 0
-				nr.Connection.UnderlyingConn().Close()
-				nr.Connection.Close()
-				fmt.Printf("[Netrunner] Shutdown initiated.\n")
-				status.Netrunner.Res = resourceMinerOffPng
-				status.Netrunner.Refresh()
-			}
-			miner.Window.Close()
-			miner.Window = nil
-		})
-		status.Netrunner.Res = resourceMinerOnPng
-		status.Netrunner.Refresh()
-		miner.Window.SetContent(layoutNetrunner())
-		miner.Window.Show()
-	}
-
-	session.Window.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
-		if session.Domain != "app.wallet" {
-			return
-		}
-
-		if k.Name == fyne.KeyRight {
-			if session.Dashboard == "node" {
-				session.Dashboard = "main"
-				gridItem1.Hidden = true
-				gridItem2.Hidden = false
-				gridItem3.Hidden = true
-				gridItem4.Hidden = true
-				rectCenter.FillColor = colors.Green
-				rectCenter.Refresh()
-				rectUp.FillColor = colors.DarkMatter
-				rectUp.Refresh()
-				rectDown.FillColor = colors.DarkMatter
-				rectDown.Refresh()
-				rectLeft.FillColor = colors.DarkMatter
-				rectLeft.Refresh()
-				rectRight.FillColor = colors.DarkMatter
-				rectRight.Refresh()
-			} else if session.Dashboard == "main" {
-				session.Dashboard = "deck"
-				gridItem1.Hidden = true
-				gridItem2.Hidden = true
-				gridItem3.Hidden = false
-				gridItem4.Hidden = true
-				rectCenter.FillColor = colors.DarkMatter
-				rectCenter.Refresh()
-				rectUp.FillColor = colors.DarkMatter
-				rectUp.Refresh()
-				rectDown.FillColor = colors.DarkMatter
-				rectDown.Refresh()
-				rectLeft.FillColor = colors.DarkMatter
-				rectLeft.Refresh()
-				rectRight.FillColor = colors.Green
-				rectRight.Refresh()
-			} else {
-				return
-			}
-
-			gridItem1.Refresh()
-			gridItem2.Refresh()
-			gridItem3.Refresh()
-			session.Window.Canvas().Content().Refresh()
-		} else if k.Name == fyne.KeyLeft {
-			if session.Dashboard == "deck" {
-				session.Dashboard = "main"
-				gridItem1.Hidden = true
-				gridItem2.Hidden = false
-				gridItem3.Hidden = true
-				gridItem4.Hidden = true
-				rectCenter.FillColor = colors.Green
-				rectCenter.Refresh()
-				rectUp.FillColor = colors.DarkMatter
-				rectUp.Refresh()
-				rectDown.FillColor = colors.DarkMatter
-				rectDown.Refresh()
-				rectLeft.FillColor = colors.DarkMatter
-				rectLeft.Refresh()
-				rectRight.FillColor = colors.DarkMatter
-				rectRight.Refresh()
-			} else if session.Dashboard == "main" {
-				session.Dashboard = "node"
-				gridItem1.Hidden = false
-				gridItem2.Hidden = true
-				gridItem3.Hidden = true
-				gridItem4.Hidden = true
-				rectCenter.FillColor = colors.DarkMatter
-				rectCenter.Refresh()
-				rectUp.FillColor = colors.DarkMatter
-				rectUp.Refresh()
-				rectDown.FillColor = colors.DarkMatter
-				rectDown.Refresh()
-				rectLeft.FillColor = colors.Green
-				rectLeft.Refresh()
-				rectRight.FillColor = colors.DarkMatter
-				rectRight.Refresh()
-			} else {
-				return
-			}
-
-			gridItem1.Refresh()
-			gridItem2.Refresh()
-			gridItem3.Refresh()
-			session.Window.Canvas().Content().Refresh()
-		} else if k.Name == fyne.KeyUp {
-			if session.Dashboard == "main" {
-				session.Dashboard = "transfers"
-
-				session.Window.SetContent(layoutTransition())
-				session.Window.SetContent(layoutTransfers())
-			} else {
-				return
-			}
-		} else if k.Name == fyne.KeyDown {
-			if session.Dashboard == "main" {
-				session.Dashboard = "contacts"
-
-				session.Window.SetContent(layoutTransition())
-				session.Window.SetContent(layoutMessages())
-			} else {
-				return
-			}
-		}
-
-	})
-
-	features := container.NewCenter(
+	top := container.NewCenter(
 		layout.NewSpacer(),
-		gridItem1,
-		layout.NewSpacer(),
-		gridItem2,
-		layout.NewSpacer(),
-		gridItem3,
-		layout.NewSpacer(),
-		gridItem4,
+		grid,
 		layout.NewSpacer(),
 	)
 
-	subContainer := container.NewMax(
+	bottom := container.NewStack(
 		container.NewVBox(
+			rectSpacer,
 			container.NewHBox(
 				layout.NewSpacer(),
-				container.NewVBox(
-					rectSpacer,
-					status.Daemon,
-				),
-				layout.NewSpacer(),
-				container.NewCenter(
-					rectSynapse,
-					synapse,
-				),
-				layout.NewSpacer(),
-				container.NewVBox(
-					rectSpacer,
-					status.Netrunner,
+				container.NewStack(
+					rect300,
+					btnCreate,
 				),
 				layout.NewSpacer(),
 			),
 			rectSpacer,
 			container.NewHBox(
 				layout.NewSpacer(),
-				container.NewMax(
-					rectStatus,
-					status.Connection,
-				),
-				widget.NewLabel(""),
-				container.NewMax(
-					rectStatus,
-					status.Sync,
-				),
-				widget.NewLabel(""),
-				container.NewMax(
-					rectStatus,
-					status.Cyberdeck,
+				container.NewHBox(
+					layout.NewSpacer(),
+					linkCancel,
+					layout.NewSpacer(),
 				),
 				layout.NewSpacer(),
 			),
+			wSpacer,
 		),
-		rectSpacer,
-		rectSpacer,
 	)
 
 	c := container.NewBorder(
-		features,
-		container.NewVBox(
-			subContainer,
-			rectSpacer,
-		),
+		top,
+		bottom,
 		nil,
 		nil,
 	)
 
-	layout := container.NewMax(
+	layout := container.NewStack(
 		frame,
 		c,
 	)
@@ -1256,8 +1290,8 @@ func layoutDashboard() fyne.CanvasObject {
 }
 
 func layoutLoading() fyne.CanvasObject {
-	res.load.FillMode = canvas.ImageFillContain
-	layout := container.NewMax(
+	res.load.FillMode = canvas.ImageFillStretch
+	layout := container.NewStack(
 		res.load,
 	)
 
@@ -1265,10 +1299,10 @@ func layoutLoading() fyne.CanvasObject {
 }
 
 func layoutNewAccount() fyne.CanvasObject {
-	// Reset UI resources
+	resizeWindow(ui.MaxWidth, ui.MaxHeight)
+	a.Settings().SetTheme(themes.alt)
 	resetResources()
 
-	// Define
 	session.Domain = "app.register"
 	session.Language = -1
 	session.Error = ""
@@ -1285,42 +1319,36 @@ func layoutNewAccount() fyne.CanvasObject {
 	btnCreate := widget.NewButton("Create", nil)
 	btnCreate.Disable()
 
-	btnCancel := widget.NewButton("Cancel", func() {
+	linkCancel := widget.NewHyperlinkWithStyle("Return to Login", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkCancel.OnTapped = func() {
 		session.Domain = "app.main"
 		session.Error = ""
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutMain())
-	})
-
-	btnClose := widget.NewButton("Close", func() {
-		session.Domain = "app.main"
-		session.Error = ""
-		session.Window.SetContent(layoutTransition())
-		session.Window.SetContent(layoutMain())
-	})
+		removeOverlays()
+	}
 
 	btnCopySeed := widget.NewButton("Copy Recovery Words", nil)
 	btnCopyAddress := widget.NewButton("Copy Address", nil)
 
-	session.Window.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
-		if session.Domain != "app.register" {
-			return
-		}
+	if !a.Driver().Device().IsMobile() {
+		session.Window.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
+			if session.Domain != "app.register" {
+				return
+			}
 
-		if k.Name == fyne.KeyReturn {
-			errorText.Text = ""
-			errorText.Refresh()
-			create()
-			errorText.Text = session.Error
-			errorText.Refresh()
-		}
-	})
+			if k.Name == fyne.KeyReturn {
+				errorText.Text = ""
+				errorText.Refresh()
+				create()
+				errorText.Text = session.Error
+				errorText.Refresh()
+			}
+		})
+	}
 
-	wPassword := newRtnEntry()
-	// Set password masking
+	wPassword := NewReturnEntry()
 	wPassword.Password = true
-	// OnChange assign password to session variable
-	// Remember to clear it after opening the wallet
 	wPassword.OnChanged = func(s string) {
 		session.Error = ""
 		errorText.Text = ""
@@ -1336,13 +1364,10 @@ func layoutNewAccount() fyne.CanvasObject {
 		}
 	}
 	wPassword.SetPlaceHolder("Password")
-	wPassword.Wrapping = fyne.TextTruncate
+	wPassword.Wrapping = fyne.TextWrap(fyne.TextTruncateClip)
 
-	wPasswordConfirm := newRtnEntry()
-	// Set password masking
+	wPasswordConfirm := NewReturnEntry()
 	wPasswordConfirm.Password = true
-	// OnChange assign password to session variable
-	// Remember to clear it after opening the wallet
 	wPasswordConfirm.OnChanged = func(s string) {
 		session.Error = ""
 		errorText.Text = ""
@@ -1358,7 +1383,7 @@ func layoutNewAccount() fyne.CanvasObject {
 		}
 	}
 	wPasswordConfirm.SetPlaceHolder("Confirm Password")
-	wPasswordConfirm.Wrapping = fyne.TextTruncate
+	wPasswordConfirm.Wrapping = fyne.TextWrap(fyne.TextTruncateClip)
 
 	wAccount := widget.NewEntry()
 	wAccount.SetPlaceHolder("Account Name")
@@ -1367,19 +1392,24 @@ func layoutNewAccount() fyne.CanvasObject {
 		errorText.Text = ""
 		errorText.Refresh()
 
-		if len(s) > 30 {
+		if len(s) > 25 {
 			err = errors.New("Account name is too long.")
 			wAccount.SetText(session.Name)
 			wAccount.Refresh()
 			return
 		}
 
-		checkDir()
-		getNetwork()
-		if !session.Network {
-			session.Path = AppPath() + string(filepath.Separator) + "testnet" + string(filepath.Separator) + s + ".db"
+		err = checkDir()
+		if err != nil {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutAlert(2))
+			return
+		}
+
+		if getTestnet() {
+			session.Path = filepath.Join(AppPath(), "testnet", s+".db")
 		} else {
-			session.Path = AppPath() + string(filepath.Separator) + "mainnet" + string(filepath.Separator) + s + ".db"
+			session.Path = filepath.Join(AppPath(), "mainnet", s+".db")
 		}
 		session.Name = s
 
@@ -1438,60 +1468,42 @@ func layoutNewAccount() fyne.CanvasObject {
 	rectStatus := canvas.NewRectangle(color.Transparent)
 	rectStatus.SetMinSize(fyne.NewSize(10, 10))
 
-	title := canvas.NewText("R E G I S T R A T I O N", colors.Gray)
-	title.TextStyle = fyne.TextStyle{Bold: true}
-	title.TextSize = 16
-
-	res.rpc_header.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_footer.SetMinSize(fyne.NewSize(300, 80))
-
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
+	rectHeader := canvas.NewRectangle(color.Transparent)
+	rectHeader.SetMinSize(fyne.NewSize(ui.Width, 10))
 
 	rectSpacer := canvas.NewRectangle(color.Transparent)
-	rectSpacer.SetMinSize(fyne.NewSize(300, 5))
+	rectSpacer.SetMinSize(fyne.NewSize(ui.Width, 5))
 
-	status.Connection.FillColor = colors.Gray
-	status.Cyberdeck.FillColor = colors.Gray
-	status.Sync.FillColor = colors.Gray
-
-	grid := container.NewAdaptiveGrid(1)
+	grid := container.NewVBox()
 	grid.Objects = nil
 
-	// Create a new form for account/password inputs
-	form := container.NewVBox(
+	header := container.NewVBox(
 		wSpacer,
-		container.NewCenter(
-			res.rpc_header,
-			container.NewVBox(
-				container.NewCenter(title),
-				rectSpacer,
-			),
-		),
-		rectSpacer,
 		heading,
-		wSpacer,
+		rectSpacer,
+		rectSpacer,
+	)
+
+	form := container.NewVBox(
 		wLanguage,
+		rectSpacer,
 		wAccount,
 		wPassword,
 		wPasswordConfirm,
 		rectSpacer,
 		errorText,
 		rectSpacer,
-		wSpacer,
-		wSpacer,
-		wSpacer,
-		wSpacer,
-		rectSpacer,
-		rectSpacer,
 		btnCreate,
-		btnCancel,
-		rectSpacer,
-		res.rpc_footer,
 	)
 
-	rectForm := canvas.NewRectangle(color.Transparent)
-	rectForm.SetMinSize(fyne.NewSize(300, 750))
+	footer := container.NewVBox(
+		container.NewHBox(
+			layout.NewSpacer(),
+			linkCancel,
+			layout.NewSpacer(),
+		),
+		wSpacer,
+	)
 
 	body := widget.NewLabel("Please save the following 25 recovery words in a safe place. These are the keys to your account, so never share them with anyone.")
 	body.Wrapping = fyne.TextWrapWord
@@ -1499,17 +1511,6 @@ func layoutNewAccount() fyne.CanvasObject {
 	body.TextStyle = fyne.TextStyle{Bold: true}
 
 	formSuccess := container.NewVBox(
-		wSpacer,
-		container.NewCenter(
-			res.rpc_header,
-			container.NewVBox(
-				container.NewCenter(title),
-				rectSpacer,
-			),
-		),
-		rectSpacer,
-		heading2,
-		rectSpacer,
 		body,
 		wSpacer,
 		container.NewCenter(grid),
@@ -1518,9 +1519,7 @@ func layoutNewAccount() fyne.CanvasObject {
 		rectSpacer,
 		btnCopyAddress,
 		btnCopySeed,
-		btnClose,
 		rectSpacer,
-		res.rpc_footer,
 	)
 
 	formSuccess.Hide()
@@ -1528,15 +1527,14 @@ func layoutNewAccount() fyne.CanvasObject {
 	scrollBox := container.NewVScroll(
 		container.NewHBox(
 			layout.NewSpacer(),
-			container.NewMax(
+			container.NewStack(
 				formSuccess,
 				form,
 			),
 			layout.NewSpacer(),
 		),
 	)
-
-	scrollBox.SetMinSize(fyne.NewSize(300, 750))
+	scrollBox.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.70))
 
 	btnCreate.OnTapped = func() {
 		if findAccount() {
@@ -1558,13 +1556,13 @@ func layoutNewAccount() fyne.CanvasObject {
 
 		formatted := strings.Split(seed, " ")
 
-		rect := canvas.NewRectangle(color.RGBA{19, 25, 34, 255})
-		rect.SetMinSize(fyne.NewSize(300, 25))
+		rect := canvas.NewRectangle(color.RGBA{21, 27, 36, 255})
+		rect.SetMinSize(fyne.NewSize(ui.Width, 25))
 
 		for i := 0; i < len(formatted); i++ {
 			pos := fmt.Sprintf("%d", i+1)
 			word := strings.ReplaceAll(formatted[i], " ", "")
-			grid.Add(container.NewMax(
+			grid.Add(container.NewStack(
 				rect,
 				container.NewHBox(
 					widget.NewLabel(" "),
@@ -1595,43 +1593,23 @@ func layoutNewAccount() fyne.CanvasObject {
 		session.Window.Canvas().Refresh(session.Window.Content())
 	}
 
-	layout := container.NewMax(
-		frame,
+	layout := container.NewBorder(
 		container.NewVBox(
+			header,
 			scrollBox,
-			layout.NewSpacer(),
-			container.NewVBox(
-				container.NewHBox(
-					layout.NewSpacer(),
-					container.NewMax(
-						rectStatus,
-						status.Connection,
-					),
-					widget.NewLabel(""),
-					container.NewMax(
-						rectStatus,
-						status.Sync,
-					),
-					widget.NewLabel(""),
-					container.NewMax(
-						rectStatus,
-						status.Cyberdeck,
-					),
-					layout.NewSpacer(),
-				),
-				rectSpacer,
-			),
 		),
+		footer,
+		nil,
+		nil,
 	)
 	return layout
 }
 
 func layoutRestore() fyne.CanvasObject {
-	var seed [25]string
-	// Reset UI resources
+	resizeWindow(ui.MaxWidth, ui.MaxHeight)
+	a.Settings().SetTheme(themes.main)
 	resetResources()
 
-	// Define
 	session.Domain = "app.restore"
 	session.Language = -1
 	session.Error = ""
@@ -1639,7 +1617,9 @@ func layoutRestore() fyne.CanvasObject {
 	session.Password = ""
 	session.PasswordConfirm = ""
 
-	//languages := mnemonics.Language_List()
+	var seed [25]string
+
+	scrollBox := container.NewVScroll(nil)
 
 	errorText := canvas.NewText(" ", colors.Green)
 	errorText.TextSize = 12
@@ -1648,27 +1628,27 @@ func layoutRestore() fyne.CanvasObject {
 	btnCreate := widget.NewButton("Recover", nil)
 	btnCreate.Disable()
 
-	btnCancel := widget.NewButton("Cancel", func() {
+	linkReturn := widget.NewHyperlinkWithStyle("Return to Login", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkReturn.OnTapped = func() {
 		session.Domain = "app.main"
 		session.Error = ""
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutMain())
-	})
-
-	btnClose := widget.NewButton("Close", func() {
-		session.Domain = "app.main"
-		session.Error = ""
-		session.Window.SetContent(layoutTransition())
-		session.Window.SetContent(layoutMain())
-	})
+		removeOverlays()
+	}
 
 	btnCopyAddress := widget.NewButton("Copy Address", nil)
 
-	wPassword := newRtnEntry()
-	// Set password masking
+	wPassword := NewMobileEntry()
+	wPassword.OnFocusGained = func() {
+		offset := wPassword.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
+
 	wPassword.Password = true
-	// OnChange assign password to session variable
-	// Remember to clear it after opening the wallet
 	wPassword.OnChanged = func(s string) {
 		session.Error = ""
 		errorText.Text = ""
@@ -1684,13 +1664,18 @@ func layoutRestore() fyne.CanvasObject {
 		}
 	}
 	wPassword.SetPlaceHolder("Password")
-	wPassword.Wrapping = fyne.TextTruncate
+	wPassword.Wrapping = fyne.TextWrap(fyne.TextTruncateClip)
 
-	wPasswordConfirm := newRtnEntry()
-	// Set password masking
+	wPasswordConfirm := NewMobileEntry()
+	wPasswordConfirm.OnFocusGained = func() {
+		offset := wPasswordConfirm.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
+
 	wPasswordConfirm.Password = true
-	// OnChange assign password to session variable
-	// Remember to clear it after opening the wallet
 	wPasswordConfirm.OnChanged = func(s string) {
 		session.Error = ""
 		errorText.Text = ""
@@ -1706,9 +1691,13 @@ func layoutRestore() fyne.CanvasObject {
 		}
 	}
 	wPasswordConfirm.SetPlaceHolder("Confirm Password")
-	wPasswordConfirm.Wrapping = fyne.TextTruncate
+	wPasswordConfirm.Wrapping = fyne.TextWrap(fyne.TextTruncateClip)
 
-	wAccount := widget.NewEntry()
+	wAccount := NewMobileEntry()
+	wAccount.OnFocusGained = func() {
+		scrollBox.Offset = fyne.NewPos(0, 0)
+		scrollBox.Refresh()
+	}
 
 	/*
 		wLanguage := widget.NewSelect(languages, nil)
@@ -1721,7 +1710,7 @@ func layoutRestore() fyne.CanvasObject {
 	*/
 
 	wAccount.SetPlaceHolder("Account Name")
-	wAccount.Wrapping = fyne.TextTruncate
+	wAccount.Wrapping = fyne.TextWrap(fyne.TextTruncateClip)
 	wAccount.Validator = func(s string) (err error) {
 		session.Error = ""
 		errorText.Text = ""
@@ -1734,12 +1723,17 @@ func layoutRestore() fyne.CanvasObject {
 			return
 		}
 
-		checkDir()
-		getNetwork()
-		if !session.Network {
-			session.Path = AppPath() + string(filepath.Separator) + "testnet" + string(filepath.Separator) + s + ".db"
+		err = checkDir()
+		if err != nil {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutAlert(2))
+			return
+		}
+
+		if getTestnet() {
+			session.Path = filepath.Join(AppPath(), "testnet") + string(filepath.Separator) + s + ".db"
 		} else {
-			session.Path = AppPath() + string(filepath.Separator) + "mainnet" + string(filepath.Separator) + s + ".db"
+			session.Path = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator) + s + ".db"
 		}
 		session.Name = s
 
@@ -1776,27 +1770,22 @@ func layoutRestore() fyne.CanvasObject {
 	rectStatus := canvas.NewRectangle(color.Transparent)
 	rectStatus.SetMinSize(fyne.NewSize(10, 10))
 
-	title := canvas.NewText("R E C O V E R", colors.Gray)
-	title.TextStyle = fyne.TextStyle{Bold: true}
-	title.TextSize = 16
+	rectHeader := canvas.NewRectangle(color.Transparent)
+	rectHeader.SetMinSize(fyne.NewSize(ui.Width, 10))
 
-	res.rpc_header.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_footer.SetMinSize(fyne.NewSize(300, 80))
-
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
+	//frame := &iframe{}
 
 	rectSpacer := canvas.NewRectangle(color.Transparent)
-	rectSpacer.SetMinSize(fyne.NewSize(300, 5))
+	rectSpacer.SetMinSize(fyne.NewSize(ui.Width, 5))
 
 	status.Connection.FillColor = colors.Gray
 	status.Cyberdeck.FillColor = colors.Gray
 	status.Sync.FillColor = colors.Gray
 
-	grid := container.NewAdaptiveGrid(1)
+	grid := container.NewVBox()
 	grid.Objects = nil
 
-	word1 := widget.NewEntry()
+	word1 := NewMobileEntry()
 	word1.PlaceHolder = "Seed Word 1"
 	word1.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -1809,8 +1798,15 @@ func layoutRestore() fyne.CanvasObject {
 	word1.OnChanged = func(s string) {
 		word1.Validate()
 	}
+	word1.OnFocusGained = func() {
+		offset := word1.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word2 := widget.NewEntry()
+	word2 := NewMobileEntry()
 	word2.PlaceHolder = "Seed Word 2"
 	word2.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -1835,8 +1831,15 @@ func layoutRestore() fyne.CanvasObject {
 	word2.OnChanged = func(s string) {
 		word2.Validate()
 	}
+	word2.OnFocusGained = func() {
+		offset := word2.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word3 := widget.NewEntry()
+	word3 := NewMobileEntry()
 	word3.PlaceHolder = "Seed Word 3"
 	word3.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -1861,8 +1864,15 @@ func layoutRestore() fyne.CanvasObject {
 	word3.OnChanged = func(s string) {
 		word3.Validate()
 	}
+	word3.OnFocusGained = func() {
+		offset := word3.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word4 := widget.NewEntry()
+	word4 := NewMobileEntry()
 	word4.PlaceHolder = "Seed Word 4"
 	word4.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -1887,8 +1897,15 @@ func layoutRestore() fyne.CanvasObject {
 	word4.OnChanged = func(s string) {
 		word4.Validate()
 	}
+	word4.OnFocusGained = func() {
+		offset := word4.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word5 := widget.NewEntry()
+	word5 := NewMobileEntry()
 	word5.PlaceHolder = "Seed Word 5"
 	word5.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -1913,8 +1930,15 @@ func layoutRestore() fyne.CanvasObject {
 	word5.OnChanged = func(s string) {
 		word5.Validate()
 	}
+	word5.OnFocusGained = func() {
+		offset := word5.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word6 := widget.NewEntry()
+	word6 := NewMobileEntry()
 	word6.PlaceHolder = "Seed Word 6"
 	word6.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -1939,8 +1963,18 @@ func layoutRestore() fyne.CanvasObject {
 	word6.OnChanged = func(s string) {
 		word6.Validate()
 	}
+	word6.OnFocusGained = func() {
+		offset := word6.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			fmt.Printf("scrollBox - before: %f\n", scrollBox.Offset.Y)
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+			fmt.Printf("scrollBox - after: %f\n", scrollBox.Offset.Y)
+		}
+		fmt.Printf("offset: %f\n", offset)
+	}
 
-	word7 := widget.NewEntry()
+	word7 := NewMobileEntry()
 	word7.PlaceHolder = "Seed Word 7"
 	word7.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -1965,8 +1999,18 @@ func layoutRestore() fyne.CanvasObject {
 	word7.OnChanged = func(s string) {
 		word7.Validate()
 	}
+	word7.OnFocusGained = func() {
+		offset := word7.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			fmt.Printf("scrollBox - before: %f\n", scrollBox.Offset.Y)
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+			fmt.Printf("scrollBox - after: %f\n", scrollBox.Offset.Y)
+		}
+		fmt.Printf("offset: %f\n", offset)
+	}
 
-	word8 := widget.NewEntry()
+	word8 := NewMobileEntry()
 	word8.PlaceHolder = "Seed Word 8"
 	word8.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -1991,8 +2035,15 @@ func layoutRestore() fyne.CanvasObject {
 	word8.OnChanged = func(s string) {
 		word8.Validate()
 	}
+	word8.OnFocusGained = func() {
+		offset := word8.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word9 := widget.NewEntry()
+	word9 := NewMobileEntry()
 	word9.PlaceHolder = "Seed Word 9"
 	word9.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2017,8 +2068,15 @@ func layoutRestore() fyne.CanvasObject {
 	word9.OnChanged = func(s string) {
 		word9.Validate()
 	}
+	word9.OnFocusGained = func() {
+		offset := word9.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word10 := widget.NewEntry()
+	word10 := NewMobileEntry()
 	word10.PlaceHolder = "Seed Word 10"
 	word10.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2043,8 +2101,15 @@ func layoutRestore() fyne.CanvasObject {
 	word10.OnChanged = func(s string) {
 		word10.Validate()
 	}
+	word10.OnFocusGained = func() {
+		offset := word10.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word11 := widget.NewEntry()
+	word11 := NewMobileEntry()
 	word11.PlaceHolder = "Seed Word 11"
 	word11.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2069,8 +2134,15 @@ func layoutRestore() fyne.CanvasObject {
 	word11.OnChanged = func(s string) {
 		word11.Validate()
 	}
+	word11.OnFocusGained = func() {
+		offset := word11.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word12 := widget.NewEntry()
+	word12 := NewMobileEntry()
 	word12.PlaceHolder = "Seed Word 12"
 	word12.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2095,8 +2167,15 @@ func layoutRestore() fyne.CanvasObject {
 	word12.OnChanged = func(s string) {
 		word12.Validate()
 	}
+	word12.OnFocusGained = func() {
+		offset := word12.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word13 := widget.NewEntry()
+	word13 := NewMobileEntry()
 	word13.PlaceHolder = "Seed Word 13"
 	word13.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2121,8 +2200,15 @@ func layoutRestore() fyne.CanvasObject {
 	word13.OnChanged = func(s string) {
 		word13.Validate()
 	}
+	word13.OnFocusGained = func() {
+		offset := word13.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word14 := widget.NewEntry()
+	word14 := NewMobileEntry()
 	word14.PlaceHolder = "Seed Word 14"
 	word14.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2147,8 +2233,15 @@ func layoutRestore() fyne.CanvasObject {
 	word14.OnChanged = func(s string) {
 		word14.Validate()
 	}
+	word14.OnFocusGained = func() {
+		offset := word14.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word15 := widget.NewEntry()
+	word15 := NewMobileEntry()
 	word15.PlaceHolder = "Seed Word 15"
 	word15.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2173,8 +2266,15 @@ func layoutRestore() fyne.CanvasObject {
 	word15.OnChanged = func(s string) {
 		word15.Validate()
 	}
+	word15.OnFocusGained = func() {
+		offset := word15.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word16 := widget.NewEntry()
+	word16 := NewMobileEntry()
 	word16.PlaceHolder = "Seed Word 16"
 	word16.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2199,8 +2299,15 @@ func layoutRestore() fyne.CanvasObject {
 	word16.OnChanged = func(s string) {
 		word16.Validate()
 	}
+	word16.OnFocusGained = func() {
+		offset := word16.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word17 := widget.NewEntry()
+	word17 := NewMobileEntry()
 	word17.PlaceHolder = "Seed Word 17"
 	word17.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2225,8 +2332,15 @@ func layoutRestore() fyne.CanvasObject {
 	word17.OnChanged = func(s string) {
 		word17.Validate()
 	}
+	word17.OnFocusGained = func() {
+		offset := word17.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word18 := widget.NewEntry()
+	word18 := NewMobileEntry()
 	word18.PlaceHolder = "Seed Word 18"
 	word18.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2251,8 +2365,15 @@ func layoutRestore() fyne.CanvasObject {
 	word18.OnChanged = func(s string) {
 		word18.Validate()
 	}
+	word18.OnFocusGained = func() {
+		offset := word18.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word19 := widget.NewEntry()
+	word19 := NewMobileEntry()
 	word19.PlaceHolder = "Seed Word 19"
 	word19.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2277,8 +2398,15 @@ func layoutRestore() fyne.CanvasObject {
 	word19.OnChanged = func(s string) {
 		word19.Validate()
 	}
+	word19.OnFocusGained = func() {
+		offset := word19.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word20 := widget.NewEntry()
+	word20 := NewMobileEntry()
 	word20.PlaceHolder = "Seed Word 20"
 	word20.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2291,8 +2419,15 @@ func layoutRestore() fyne.CanvasObject {
 	word20.OnChanged = func(s string) {
 		word20.Validate()
 	}
+	word20.OnFocusGained = func() {
+		offset := word20.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word21 := widget.NewEntry()
+	word21 := NewMobileEntry()
 	word21.PlaceHolder = "Seed Word 21"
 	word21.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2317,8 +2452,15 @@ func layoutRestore() fyne.CanvasObject {
 	word21.OnChanged = func(s string) {
 		word21.Validate()
 	}
+	word21.OnFocusGained = func() {
+		offset := word21.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word22 := widget.NewEntry()
+	word22 := NewMobileEntry()
 	word22.PlaceHolder = "Seed Word 22"
 	word22.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2343,8 +2485,15 @@ func layoutRestore() fyne.CanvasObject {
 	word22.OnChanged = func(s string) {
 		word22.Validate()
 	}
+	word22.OnFocusGained = func() {
+		offset := word22.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word23 := widget.NewEntry()
+	word23 := NewMobileEntry()
 	word23.PlaceHolder = "Seed Word 23"
 	word23.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2369,8 +2518,15 @@ func layoutRestore() fyne.CanvasObject {
 	word23.OnChanged = func(s string) {
 		word23.Validate()
 	}
+	word23.OnFocusGained = func() {
+		offset := word23.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word24 := widget.NewEntry()
+	word24 := NewMobileEntry()
 	word24.PlaceHolder = "Seed Word 24"
 	word24.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2395,8 +2551,15 @@ func layoutRestore() fyne.CanvasObject {
 	word24.OnChanged = func(s string) {
 		word24.Validate()
 	}
+	word24.OnFocusGained = func() {
+		offset := word24.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+		}
+	}
 
-	word25 := widget.NewEntry()
+	word25 := NewMobileEntry()
 	word25.PlaceHolder = "Seed Word 25"
 	word25.Validator = func(s string) error {
 		if !checkSeedWord(s) {
@@ -2421,142 +2584,127 @@ func layoutRestore() fyne.CanvasObject {
 	word25.OnChanged = func(s string) {
 		word25.Validate()
 	}
+	word25.OnFocusGained = func() {
+		offset := word25.Position().Y
+		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
+			fmt.Printf("scrollBox - before: %f\n", scrollBox.Offset.Y)
+			scrollBox.Offset = fyne.NewPos(0, offset)
+			scrollBox.Refresh()
+			fmt.Printf("scrollBox - after: %f\n", scrollBox.Offset.Y)
+		}
+	}
 
 	// Create a new form for account/password inputs
-	form := container.NewVBox(
-		wSpacer,
-		container.NewCenter(
-			res.rpc_header,
-			container.NewVBox(
-				container.NewCenter(title),
-				rectSpacer,
-			),
+	form := container.NewHBox(
+		layout.NewSpacer(),
+		container.NewVBox(
+			//wLanguage,
+			wAccount,
+			wPassword,
+			wPasswordConfirm,
+			rectSpacer,
+			rectSpacer,
+			word1,
+			rectSpacer,
+			word2,
+			rectSpacer,
+			word3,
+			rectSpacer,
+			word4,
+			rectSpacer,
+			word5,
+			rectSpacer,
+			word6,
+			rectSpacer,
+			word7,
+			rectSpacer,
+			word8,
+			rectSpacer,
+			word9,
+			rectSpacer,
+			word10,
+			rectSpacer,
+			word11,
+			rectSpacer,
+			word12,
+			rectSpacer,
+			word13,
+			rectSpacer,
+			word14,
+			rectSpacer,
+			word15,
+			rectSpacer,
+			word16,
+			rectSpacer,
+			word17,
+			rectSpacer,
+			word18,
+			rectSpacer,
+			word19,
+			rectSpacer,
+			word20,
+			rectSpacer,
+			word21,
+			rectSpacer,
+			word22,
+			rectSpacer,
+			word23,
+			rectSpacer,
+			word24,
+			rectSpacer,
+			word25,
+			rectSpacer,
+			errorText,
+			rectSpacer,
 		),
-		rectSpacer,
-		heading,
-		wSpacer,
-		//wLanguage,
-		wAccount,
-		wPassword,
-		wPasswordConfirm,
-		rectSpacer,
-		rectSpacer,
-		word1,
-		rectSpacer,
-		word2,
-		rectSpacer,
-		word3,
-		rectSpacer,
-		word4,
-		rectSpacer,
-		word5,
-		rectSpacer,
-		word6,
-		rectSpacer,
-		word7,
-		rectSpacer,
-		word8,
-		rectSpacer,
-		word9,
-		rectSpacer,
-		word10,
-		rectSpacer,
-		word11,
-		rectSpacer,
-		word12,
-		rectSpacer,
-		word13,
-		rectSpacer,
-		word14,
-		rectSpacer,
-		word15,
-		rectSpacer,
-		word16,
-		rectSpacer,
-		word17,
-		rectSpacer,
-		word18,
-		rectSpacer,
-		word19,
-		rectSpacer,
-		word20,
-		rectSpacer,
-		word21,
-		rectSpacer,
-		word22,
-		rectSpacer,
-		word23,
-		rectSpacer,
-		word24,
-		rectSpacer,
-		word25,
-		rectSpacer,
-		errorText,
-		wSpacer,
-		btnCreate,
-		btnCancel,
-		rectSpacer,
-		res.rpc_footer,
+		layout.NewSpacer(),
 	)
-
-	rectForm := canvas.NewRectangle(color.Transparent)
-	rectForm.SetMinSize(fyne.NewSize(300, 750))
 
 	body := widget.NewLabel("Your account has been successfully recovered. ")
 	body.Wrapping = fyne.TextWrapWord
 	body.Alignment = fyne.TextAlignCenter
 	body.TextStyle = fyne.TextStyle{Bold: true}
 
-	formSuccess := container.NewVBox(
-		wSpacer,
-		container.NewCenter(
-			res.rpc_header,
-			container.NewVBox(
-				container.NewCenter(title),
-				rectSpacer,
-			),
+	formSuccess := container.NewHBox(
+		layout.NewSpacer(),
+		container.NewVBox(
+			wSpacer,
+			heading2,
+			rectSpacer,
+			body,
+			wSpacer,
+			container.NewCenter(grid),
+			rectSpacer,
+			errorText,
+			rectSpacer,
+			btnCopyAddress,
+			rectSpacer,
 		),
-		rectSpacer,
-		heading2,
-		rectSpacer,
-		body,
-		wSpacer,
-		container.NewCenter(grid),
-		rectSpacer,
-		errorText,
-		rectSpacer,
-		btnCopyAddress,
-		btnClose,
-		rectSpacer,
-		res.rpc_footer,
+		layout.NewSpacer(),
 	)
 
 	formSuccess.Hide()
 
-	scrollBox := container.NewVScroll(
-		container.NewHBox(
-			layout.NewSpacer(),
-			container.NewMax(
-				formSuccess,
-				form,
+	scrollBox = container.NewVScroll(
+		container.NewStack(
+			rectHeader,
+			container.NewHBox(
+				layout.NewSpacer(),
+				container.NewCenter(
+					form,
+					formSuccess,
+				),
+				layout.NewSpacer(),
 			),
-			layout.NewSpacer(),
 		),
 	)
 
-	scrollBox.SetMinSize(fyne.NewSize(300, 740))
+	scrollBox.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.60))
 
 	btnCreate.OnTapped = func() {
 		if engram.Disk != nil {
 			closeWallet()
 		}
-		/*
-			if wLanguage.SelectedIndex() == -1 {
-				errorText.Text = "Please select a language and try again."
-				errorText.Refresh()
-				return
-			}
-		*/
 
 		var err error
 
@@ -2571,38 +2719,17 @@ func layoutRestore() fyne.CanvasObject {
 			errorText.Refresh()
 		}
 
-		getNetwork()
+		getTestnet()
 
-		var format []string
 		var words string
 
-		for w := range seed {
-			format = append(format, seed[w])
-			words += seed[w] + " "
+		for i := 0; i < 25; i++ {
+			words += seed[i] + " "
 		}
 
 		language, _, err := mnemonics.Words_To_Key(words)
 
-		/*
-			prefix := mnemonics.Languages[session.Language].Unique_Prefix_Length
-			check := mnemonics.Verify_Checksum(format, prefix)
-
-			if !check {
-				errorText.Text = "Check your recovery words and try again."
-				errorText.Color = colors.Red
-				errorText.Refresh()
-				return
-			}
-		*/
-
-		account, err := walletapi.Generate_Account_From_Recovery_Words(words)
-		if err != nil {
-			logger.Error(err, "Error while recovering seed.")
-			return
-		}
-
-		//engram.Disk, err = walletapi.Create_Encrypted_Wallet_From_Recovery_Words(session.Path, session.Password, words)
-		temp, err := walletapi.Create_Encrypted_Wallet(session.Path, session.Password, account.Keys.Secret)
+		temp, err := walletapi.Create_Encrypted_Wallet_From_Recovery_Words(session.Path, session.Password, words)
 		if err != nil {
 			errorText.Text = err.Error()
 			errorText.Color = colors.Red
@@ -2613,7 +2740,7 @@ func layoutRestore() fyne.CanvasObject {
 		engram.Disk = temp
 		temp = nil
 
-		if !session.Network {
+		if session.Testnet {
 			engram.Disk.SetNetwork(false)
 		} else {
 			engram.Disk.SetNetwork(true)
@@ -2627,9 +2754,8 @@ func layoutRestore() fyne.CanvasObject {
 			session.Window.Clipboard().SetContent(address)
 		}
 
-		engram.Disk.SetDaemonAddress(getDaemon())
-		engram.Disk.SetOnlineMode()
 		engram.Disk.Get_Balance_Rescan()
+		engram.Disk.Save_Wallet()
 		engram.Disk.Close_Encrypted_Wallet()
 
 		session.WalletOpen = false
@@ -2638,6 +2764,7 @@ func layoutRestore() fyne.CanvasObject {
 		session.Name = ""
 		tx = Transfers{}
 
+		btnCreate.Hide()
 		form.Hide()
 		form.Refresh()
 		formSuccess.Show()
@@ -2648,39 +2775,1559 @@ func layoutRestore() fyne.CanvasObject {
 		session.Window.Canvas().Refresh(session.Window.Content())
 	}
 
-	layout := container.NewMax(
-		frame,
+	header := container.NewVBox(
+		wSpacer,
+		heading,
+		wSpacer,
+	)
+
+	rect1 := canvas.NewRectangle(color.Transparent)
+	rect1.SetMinSize(fyne.NewSize(ui.Width, 1))
+
+	footer := container.NewCenter(
+		rect1,
 		container.NewVBox(
+			btnCreate,
+			rectSpacer,
+			container.NewHBox(
+				layout.NewSpacer(),
+				linkReturn,
+				layout.NewSpacer(),
+			),
+			wSpacer,
+		),
+	)
+
+	layout := container.NewBorder(
+		container.NewVBox(
+			header,
 			scrollBox,
+			rectSpacer,
+		),
+		footer,
+		nil,
+		nil,
+	)
+	return layout
+}
+
+func layoutAssetExplorer() fyne.CanvasObject {
+	session.Domain = "app.explorer"
+	resetResources()
+	var data []string
+	var listData binding.StringList
+	var listBox *widget.List
+
+	frame := &iframe{}
+	rectLeft := canvas.NewRectangle(color.Transparent)
+	rectLeft.SetMinSize(fyne.NewSize(ui.Width*0.40, 35))
+	rectRight := canvas.NewRectangle(color.Transparent)
+	rectRight.SetMinSize(fyne.NewSize(ui.Width*0.58, 35))
+	rectList := canvas.NewRectangle(color.Transparent)
+	rectList.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.47))
+	rectWidth := canvas.NewRectangle(color.Transparent)
+	rectWidth.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+	heading := canvas.NewText("Asset Explorer", colors.Green)
+	heading.TextSize = 22
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(6, 5))
+
+	results := canvas.NewText("", colors.Green)
+	results.TextSize = 13
+
+	listData = binding.BindStringList(&data)
+	listBox = widget.NewListWithData(listData,
+		func() fyne.CanvasObject {
+			return container.NewStack(
+				container.NewHBox(
+					container.NewStack(
+						rectLeft,
+						widget.NewLabel(""),
+					),
+					container.NewStack(
+						rectRight,
+						widget.NewLabel(""),
+					),
+				),
+			)
+		},
+		func(di binding.DataItem, co fyne.CanvasObject) {
+			dat := di.(binding.String)
+			str, err := dat.Get()
+			if err != nil {
+				return
+			}
+
+			split := strings.Split(str, ";;;")
+
+			co.(*fyne.Container).Objects[0].(*fyne.Container).Objects[0].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[0])
+			co.(*fyne.Container).Objects[0].(*fyne.Container).Objects[1].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[1])
+			//co.(*fyne.Container).Objects[3].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[3])
+		})
+
+	menu := widget.NewSelect([]string{"My Assets", "Search By SCID"}, nil)
+	menu.PlaceHolder = "(Select One)"
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	entrySCID := widget.NewEntry()
+	entrySCID.PlaceHolder = "Search by SCID"
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	btnSearch := widget.NewButton("Search", nil)
+	btnSearch.OnTapped = func() {
+
+	}
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Dashboard", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
+	}
+
+	btnMyAssets := widget.NewButton("My Assets", nil)
+	btnMyAssets.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutMyAssets())
+	}
+
+	layoutExplorer := container.NewStack(
+		rectWidth,
+		container.NewHBox(
 			layout.NewSpacer(),
 			container.NewVBox(
+				rectSpacer,
+				results,
+				rectSpacer,
+				rectSpacer,
+				entrySCID,
+				rectSpacer,
+				rectSpacer,
+				container.NewStack(
+					rectList,
+					listBox,
+				),
+				rectSpacer,
+				rectSpacer,
+				btnMyAssets,
+			),
+			layout.NewSpacer(),
+		),
+	)
+
+	listing := layoutExplorer
+
+	var assetData []string
+
+	found := 0
+	assetData = nil
+
+	results.Text = fmt.Sprintf("  Results:  %d", found)
+	results.Color = colors.Green
+	results.Refresh()
+
+	listData.Set(nil)
+
+	if session.Offline {
+		results.Text = "  Asset Explorer is disabled in offline mode."
+		results.Color = colors.Gray
+		results.Refresh()
+	} else if gnomon.Index == nil {
+		results.Text = "  Asset Explorer is disabled. Gnomon is inactive."
+		results.Color = colors.Gray
+		results.Refresh()
+	}
+
+	entrySCID.OnChanged = func(s string) {
+		if entrySCID.Text != "" && len(s) == 64 {
+			result := gnomon.Index.GravDBBackend.GetSCIDVariableDetailsAtTopoheight(s, engram.Disk.Get_Daemon_TopoHeight())
+
+			if len(result) == 0 {
+				_, err := getTxData(s)
+				if err != nil {
+					return
+				}
+			}
+
+			err := StoreEncryptedValue("Explorer History", []byte(s), []byte(""))
+			if err != nil {
+				fmt.Printf("[Asset Explorer] Error saving search result: %s\n", err)
+				return
+			}
+
+			scid := crypto.HashHexToHash(s)
+
+			bal, _, err := engram.Disk.GetDecryptedBalanceAtTopoHeight(scid, -1, engram.Disk.GetAddress().String())
+
+			title, desc, _, _, _ := getContractHeader(scid)
+
+			if title == "" {
+				title = scid.String()
+			}
+
+			if len(title) > 18 {
+				title = title[0:18] + "..."
+			}
+
+			if desc == "" {
+				desc = "N/A"
+			}
+
+			if len(desc) > 40 {
+				desc = desc[0:40] + "..."
+			}
+
+			assetData = append(data, globals.FormatMoney(bal)+";;;"+title+";;;"+desc+";;;;;;"+scid.String())
+			listData.Set(assetData)
+			found += 1
+
+			overlay := session.Window.Canvas().Overlays()
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					canvas.NewRectangle(colors.DarkMatter),
+				),
+			)
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					layoutAssetManager(s),
+				),
+			)
+			overlay.Top().Show()
+
+			entrySCID.Text = ""
+			entrySCID.Refresh()
+
+			results.Text = fmt.Sprintf("  Results:  %d", found)
+			results.Color = colors.Green
+			results.Refresh()
+		}
+	}
+
+	go func() {
+		if engram.Disk != nil && gnomon.Index != nil {
+			for gnomon.Index.LastIndexedHeight < int64(engram.Disk.Get_Daemon_Height()) {
+				results.Text = fmt.Sprintf("  Gnomon is syncing... [%d / %d]", gnomon.Index.LastIndexedHeight, int64(engram.Disk.Get_Daemon_Height()))
+				results.Color = colors.Yellow
+				results.Refresh()
+				time.Sleep(time.Second * 1)
+			}
+
+			results.Text = fmt.Sprintf("  Loading previous scan history...")
+			results.Color = colors.Yellow
+			results.Refresh()
+
+			shard, err := GetShard()
+			if err != nil {
+				return
+			}
+
+			store, err := graviton.NewDiskStore(shard)
+			if err != nil {
+				return
+			}
+
+			ss, err := store.LoadSnapshot(0)
+
+			if err != nil {
+				return
+			}
+
+			tree, err := ss.GetTree("Explorer History")
+			if err != nil {
+				return
+			}
+
+			c := tree.Cursor()
+
+			for k, _, err := c.First(); err == nil; k, _, err = c.Next() {
+				scid := crypto.HashHexToHash(string(k))
+
+				bal, _, err := engram.Disk.GetDecryptedBalanceAtTopoHeight(scid, -1, engram.Disk.GetAddress().String())
+				if err != nil {
+					bal = 0
+				}
+
+				title, desc, _, _, _ := getContractHeader(scid)
+
+				if title == "" {
+					title = scid.String()
+				}
+
+				if len(title) > 18 {
+					title = title[0:18] + "..."
+				}
+
+				if desc == "" {
+					desc = "N/A"
+				}
+
+				if len(desc) > 40 {
+					desc = desc[0:40] + "..."
+				}
+
+				assetData = append(data, globals.FormatMoney(bal)+";;;"+title+";;;"+desc+";;;;;;"+scid.String())
+				listData.Set(assetData)
+				found += 1
+			}
+		}
+
+		results.Text = fmt.Sprintf("  Search History:  %d", found)
+		results.Color = colors.Green
+		results.Refresh()
+
+		listData.Set(assetData)
+
+		listBox.OnSelected = func(id widget.ListItemID) {
+			split := strings.Split(assetData[id], ";;;")
+			overlay := session.Window.Canvas().Overlays()
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					canvas.NewRectangle(colors.DarkMatter),
+				),
+			)
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					layoutAssetManager(split[4]),
+				),
+			)
+			overlay.Top().Show()
+			listBox.UnselectAll()
+		}
+		listBox.Refresh()
+	}()
+
+	top := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			heading,
+		),
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			listing,
+		),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			rectSpacer,
+			rectSpacer,
+			container.NewStack(
 				container.NewHBox(
 					layout.NewSpacer(),
-					container.NewMax(
-						rectStatus,
-						status.Connection,
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	layout := container.NewStack(
+		frame,
+		container.NewBorder(
+			top,
+			bottom,
+			nil,
+			nil,
+		),
+	)
+
+	return layout
+}
+
+func layoutMyAssets() fyne.CanvasObject {
+	resetResources()
+	var data []string
+	var listData binding.StringList
+	var listBox *widget.List
+
+	frame := &iframe{}
+	rectLeft := canvas.NewRectangle(color.Transparent)
+	rectLeft.SetMinSize(fyne.NewSize(ui.Width*0.40, 35))
+	rectRight := canvas.NewRectangle(color.Transparent)
+	rectRight.SetMinSize(fyne.NewSize(ui.Width*0.59, 35))
+	rectList := canvas.NewRectangle(color.Transparent)
+	rectList.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.55))
+	rectWidth := canvas.NewRectangle(color.Transparent)
+	rectWidth.SetMinSize(fyne.NewSize(ui.MaxWidth, 10))
+
+	heading := canvas.NewText("My Assets", colors.Green)
+	heading.TextSize = 22
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(6, 5))
+
+	results := canvas.NewText("", colors.Green)
+	results.TextSize = 13
+
+	listData = binding.BindStringList(&data)
+	listBox = widget.NewListWithData(listData,
+		func() fyne.CanvasObject {
+			return container.NewStack(
+				container.NewHBox(
+					container.NewStack(
+						rectLeft,
+						widget.NewLabel(""),
 					),
-					widget.NewLabel(""),
-					container.NewMax(
-						rectStatus,
-						status.Sync,
+					container.NewStack(
+						rectRight,
+						widget.NewLabel(""),
 					),
-					widget.NewLabel(""),
-					container.NewMax(
-						rectStatus,
-						status.Cyberdeck,
+				),
+			)
+		},
+		func(di binding.DataItem, co fyne.CanvasObject) {
+			dat := di.(binding.String)
+			str, err := dat.Get()
+			if err != nil {
+				return
+			}
+
+			split := strings.Split(str, ";;;")
+
+			co.(*fyne.Container).Objects[0].(*fyne.Container).Objects[0].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[0])
+			co.(*fyne.Container).Objects[0].(*fyne.Container).Objects[1].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[1])
+			//co.(*fyne.Container).Objects[3].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[3])
+		})
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	entrySCID := widget.NewEntry()
+	entrySCID.PlaceHolder = "Search by SCID"
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Asset Explorer", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutAssetExplorer())
+		removeOverlays()
+	}
+
+	btnRescan := widget.NewButton("  Rescan Blockchain  ", nil)
+	btnRescan.Disable()
+
+	layoutAssets := container.NewStack(
+		rectWidth,
+		container.NewHBox(
+			layout.NewSpacer(),
+			container.NewVBox(
+				rectSpacer,
+				results,
+				rectSpacer,
+				rectSpacer,
+				container.NewStack(
+					rectList,
+					listBox,
+				),
+				rectSpacer,
+				rectSpacer,
+				btnRescan,
+			),
+			layout.NewSpacer(),
+		),
+	)
+
+	listing := layoutAssets
+
+	var assetData []string
+	assetCount := 0
+	assetTotal := 0
+	owned := 0
+
+	owned = 0
+	assetData = nil
+	listData.Set(nil)
+
+	if session.Offline {
+		results.Text = "  Asset tracking is disabled in offline mode."
+		results.Color = colors.Gray
+		results.Refresh()
+	} else if gnomon.Index == nil {
+		results.Text = "  Asset tracking is disabled. Gnomon is inactive."
+		results.Color = colors.Gray
+		results.Refresh()
+	}
+
+	go func() {
+		if engram.Disk != nil && gnomon.Index != nil {
+			if gnomon.Index.LastIndexedHeight < int64(engram.Disk.Get_Daemon_Height()) {
+				btnRescan.Disable()
+			} else {
+				btnRescan.Enable()
+			}
+
+			results.Text = "  Gathering an index of smart contracts... "
+			results.Color = colors.Yellow
+			results.Refresh()
+
+			for gnomon.Index.LastIndexedHeight < int64(engram.Disk.Get_Daemon_Height()) {
+				results.Text = fmt.Sprintf("  Gnomon is syncing... [%d / %d]", gnomon.Index.LastIndexedHeight, int64(engram.Disk.Get_Daemon_Height()))
+				results.Color = colors.Yellow
+				results.Refresh()
+				time.Sleep(time.Second * 1)
+			}
+
+			results.Text = fmt.Sprintf("  Loading previous scan results...")
+			results.Color = colors.Yellow
+			results.Refresh()
+
+			var assetList map[string]string
+			var zerobal uint64
+
+			shard, err := GetShard()
+			if err != nil {
+				return
+			}
+
+			store, err := graviton.NewDiskStore(shard)
+			if err != nil {
+				return
+			}
+
+			ss, err := store.LoadSnapshot(0)
+
+			if err != nil {
+				return
+			}
+
+			tree, err := ss.GetTree("My Assets")
+			if err != nil {
+				return
+			}
+
+			c := tree.Cursor()
+
+			for k, _, err := c.First(); err == nil; k, _, err = c.Next() {
+				scid := string(k)
+
+				hash := crypto.HashHexToHash(scid)
+
+				bal, _, err := engram.Disk.GetDecryptedBalanceAtTopoHeight(hash, -1, engram.Disk.GetAddress().String())
+				if err != nil {
+					return
+				} else {
+					//if bal != zerobal {
+					title, desc, _, _, _ := getContractHeader(hash)
+
+					if title == "" {
+						title = scid
+					}
+
+					if len(title) > 18 {
+						title = title[0:18] + "..."
+					}
+
+					if desc == "" {
+						desc = "N/A"
+					}
+
+					if len(desc) > 40 {
+						desc = desc[0:40] + "..."
+					}
+
+					balance := globals.FormatMoney(bal)
+					assetData = append(data, balance+";;;"+title+";;;"+desc+";;;;;;"+scid)
+					listData.Set(assetData)
+					owned += 1
+				}
+				//}
+			}
+
+			rescan := func() {
+				assetTotal = 0
+				assetCount = 0
+
+				results.Text = fmt.Sprintf("  Indexing Gnomon results... Please wait.")
+				results.Color = colors.Yellow
+				results.Refresh()
+
+				owned = 0
+
+				assetData = []string{}
+				listBox.UnselectAll()
+				listData.Set(assetData)
+
+				assetList = gnomon.Index.GravDBBackend.GetAllOwnersAndSCIDs()
+
+				for len(assetList) < 5 {
+					fmt.Printf("[Gnomon] Asset Scan Status: [%d / %d / %d]\n", gnomon.Index.LastIndexedHeight, engram.Disk.Get_Daemon_Height(), len(assetList))
+					results.Color = colors.Yellow
+					assetList = gnomon.Index.GravDBBackend.GetAllOwnersAndSCIDs()
+					time.Sleep(time.Second * 5)
+				}
+
+				results.Text = fmt.Sprintf("  Indexing complete - Scanning balances...")
+				results.Color = colors.Yellow
+				results.Refresh()
+
+				assetList = gnomon.Index.GravDBBackend.GetAllOwnersAndSCIDs()
+
+				contracts := []crypto.Hash{}
+
+				for sc := range assetList {
+					scid := crypto.HashHexToHash(sc)
+
+					if !scid.IsZero() {
+						assetCount += 1
+						contracts = append(contracts, scid)
+					}
+				}
+
+				wg := sync.WaitGroup{}
+				maxWorkers := 15
+				lastJob := 0
+
+			parse:
+
+				if lastJob+maxWorkers > len(contracts) {
+					maxWorkers = assetCount - lastJob
+				}
+
+				wg.Add(maxWorkers)
+
+				// Parse each smart contract ID and check for a balance
+				for i := 0; i < maxWorkers; i++ {
+					index := lastJob
+					go func(i int) {
+						defer wg.Done()
+
+						scid := contracts[index]
+
+						desc := ""
+						title := ""
+
+						assetTotal += 1
+
+						results.Text = "  Scanning smart contracts... " + fmt.Sprintf("%d / %d", assetTotal, assetCount)
+						results.Color = colors.Yellow
+						results.Refresh()
+
+						balance := globals.FormatMoney(0)
+
+						bal, _, err := engram.Disk.GetDecryptedBalanceAtTopoHeight(scid, -1, engram.Disk.GetAddress().String())
+						if err != nil {
+							return
+						} else {
+							balance = globals.FormatMoney(bal)
+
+							if bal != zerobal {
+								err = StoreEncryptedValue("My Assets", []byte(scid.String()), []byte(balance))
+								if err != nil {
+									fmt.Printf("[History] Failed to store asset: %s\n", err)
+								}
+
+								title, desc, _, _, _ = getContractHeader(scid)
+
+								if title == "" {
+									title = scid.String()
+								}
+
+								if len(title) > 20 {
+									title = title[0:20] + "..."
+								}
+
+								if desc == "" {
+									desc = "N/A"
+								}
+
+								if len(desc) > 40 {
+									desc = desc[0:40] + "..."
+								}
+
+								owned += 1
+								assetData = append(assetData, balance+";;;"+title+";;;"+desc+";;;;;;"+scid.String())
+								listData.Set(assetData)
+								fmt.Printf("[Assets] Found asset: %s\n", scid.String())
+							}
+						}
+					}(i)
+
+					lastJob += 1
+				}
+
+				wg.Wait()
+
+				if lastJob < len(contracts) {
+					goto parse
+				}
+
+				results.Text = fmt.Sprintf("  Owned Assets:  %d", owned)
+				results.Color = colors.Green
+				results.Refresh()
+
+				listData.Set(assetData)
+			}
+
+			btnRescan.OnTapped = rescan
+
+			if len(assetData) == 0 {
+				rescan()
+			}
+
+			results.Text = fmt.Sprintf("  Owned Assets:  %d", owned)
+			results.Color = colors.Green
+			results.Refresh()
+
+			listData.Set(assetData)
+
+			listBox.OnSelected = func(id widget.ListItemID) {
+				split := strings.Split(assetData[id], ";;;")
+				overlay := session.Window.Canvas().Overlays()
+				overlay.Add(
+					container.NewStack(
+						&iframe{},
+						canvas.NewRectangle(colors.DarkMatter),
+					),
+				)
+				overlay.Add(
+					container.NewStack(
+						&iframe{},
+						layoutAssetManager(split[4]),
+					),
+				)
+				overlay.Top().Show()
+				listBox.UnselectAll()
+			}
+			listBox.Refresh()
+			btnRescan.Enable()
+		}
+	}()
+
+	top := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			heading,
+		),
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			listing,
+		),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			rectSpacer,
+			rectSpacer,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	layout := container.NewStack(
+		frame,
+		container.NewBorder(
+			top,
+			bottom,
+			nil,
+			nil,
+		),
+	)
+
+	return layout
+}
+
+func layoutAssetManager(scid string) fyne.CanvasObject {
+	resetResources()
+
+	session.Domain = "app.manager"
+
+	wSpacer := widget.NewLabel(" ")
+
+	frame := &iframe{}
+
+	rectBox := canvas.NewRectangle(color.Transparent)
+	rectBox.SetMinSize(fyne.NewSize(ui.MaxWidth*0.99, ui.MaxHeight*0.58))
+	rectWidth90 := canvas.NewRectangle(color.Transparent)
+	rectWidth90.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+	heading := canvas.NewText("Asset Manager", colors.Green)
+	heading.TextSize = 22
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(6, 5))
+
+	labelSigner := canvas.NewText("SMART  CONTRACT  AUTHOR", colors.Gray)
+	labelSigner.TextSize = 11
+	labelSigner.Alignment = fyne.TextAlignLeading
+	labelSigner.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelOwner := canvas.NewText("SMART  CONTRACT  OWNER", colors.Gray)
+	labelOwner.TextSize = 11
+	labelOwner.Alignment = fyne.TextAlignLeading
+	labelOwner.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelSCID := canvas.NewText("SMART  CONTRACT  ID", colors.Gray)
+	labelSCID.TextSize = 11
+	labelSCID.Alignment = fyne.TextAlignLeading
+	labelSCID.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelBalance := canvas.NewText("ASSET  BALANCE", colors.Gray)
+	labelBalance.TextSize = 11
+	labelBalance.Alignment = fyne.TextAlignLeading
+	labelBalance.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelExecute := canvas.NewText("EXECUTE  ACTION", colors.Gray)
+	labelExecute.TextSize = 11
+	labelExecute.Alignment = fyne.TextAlignLeading
+	labelExecute.TextStyle = fyne.TextStyle{Bold: true}
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	entryAddress := widget.NewEntry()
+	entryAddress.PlaceHolder = "Username or Address"
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	sc := widget.NewLabel(scid)
+	sc.Wrapping = fyne.TextWrap(fyne.TextWrapWord)
+
+	hash := crypto.HashHexToHash(scid)
+	name, desc, icon, owner, code := getContractHeader(hash)
+
+	if owner == "" {
+		owner = "--"
+	}
+
+	signer := "--"
+
+	result, err := getTxData(scid)
+	if err != nil {
+		signer = "--"
+	} else {
+		signer = result.Txs[0].Signer
+	}
+
+	labelName := widget.NewRichTextFromMarkdown(name)
+	labelName.Wrapping = fyne.TextWrapOff
+	labelName.ParseMarkdown("## " + name)
+
+	labelDesc := widget.NewRichTextFromMarkdown(desc)
+	labelDesc.Wrapping = fyne.TextWrapWord
+	labelDesc.ParseMarkdown(desc)
+
+	textSigner := widget.NewRichTextFromMarkdown(owner)
+	textSigner.Wrapping = fyne.TextWrapWord
+	textSigner.ParseMarkdown(signer)
+
+	textOwner := widget.NewRichTextFromMarkdown(owner)
+	textOwner.Wrapping = fyne.TextWrapWord
+	textOwner.ParseMarkdown(owner)
+
+	btnSend := widget.NewButton("Send Asset", nil)
+
+	entryAddress.Validator = func(s string) error {
+		btnSend.Text = "Send Asset"
+		btnSend.Refresh()
+		_, err := globals.ParseValidateAddress(s)
+		if err != nil {
+			go func() {
+				exists, _, err := checkUsername(s, -1)
+				if err != nil && !exists {
+					btnSend.Disable()
+					entryAddress.SetValidationError(errors.New("invalid username or address"))
+				} else {
+					entryAddress.SetValidationError(nil)
+					btnSend.Enable()
+				}
+			}()
+		} else {
+			entryAddress.SetValidationError(nil)
+			btnSend.Enable()
+		}
+		return nil
+	}
+
+	entryAmount := widget.NewEntry()
+	entryAmount.PlaceHolder = "Asset Amount (Numbers Only)"
+	entryAmount.Validator = func(s string) error {
+		if s != "" {
+			amount, err := globals.ParseAmount(s)
+			if err != nil {
+				btnSend.Disable()
+				entryAmount.SetValidationError(errors.New("invalid amount entered"))
+				return err
+			} else {
+				bal, _, err := engram.Disk.GetDecryptedBalanceAtTopoHeight(hash, -1, engram.Disk.GetAddress().String())
+				if err != nil {
+					btnSend.Disable()
+					entryAmount.SetValidationError(errors.New("error parsing asset balance"))
+					return err
+				} else {
+					if amount > bal || amount == 0 {
+						err = errors.New("insufficient asset balance")
+						btnSend.Text = "Insufficient transfer amount..."
+						btnSend.Disable()
+						entryAmount.SetValidationError(err)
+						return err
+					}
+				}
+			}
+		}
+
+		btnSend.Text = "Send Asset"
+		btnSend.Enable()
+		entryAmount.SetValidationError(nil)
+
+		return nil
+	}
+
+	var zerobal uint64
+
+	balance := widget.NewRichTextFromMarkdown(fmt.Sprintf("%d", zerobal))
+	balance.Wrapping = fyne.TextWrapWord
+
+	btnSend.OnTapped = func() {
+		btnSend.Text = "Setting up transfer..."
+		btnSend.Disable()
+		btnSend.Refresh()
+
+		txid, err := transferAsset(hash, entryAddress.Text, entryAmount.Text)
+		if err != nil {
+			entryAddress.Text = ""
+			entryAddress.Refresh()
+			entryAmount.Text = ""
+			entryAmount.Refresh()
+			btnSend.Text = "Transaction Failed..."
+			btnSend.Disable()
+			btnSend.Refresh()
+		} else {
+			entryAddress.Text = ""
+			entryAddress.Refresh()
+			entryAmount.Text = ""
+			entryAmount.Refresh()
+			btnSend.Text = "Confirming..."
+			btnSend.Disable()
+			btnSend.Refresh()
+
+			go func() {
+				walletapi.WaitNewHeightBlock()
+
+				for session.Domain == "app.manager" {
+					result := engram.Disk.Get_Payments_TXID(txid.String())
+
+					if result.TXID != txid.String() {
+						time.Sleep(time.Second * 1)
+					} else {
+						break
+					}
+				}
+
+				bal, _, err := engram.Disk.GetDecryptedBalanceAtTopoHeight(hash, -1, engram.Disk.GetAddress().String())
+				if err == nil {
+					err = StoreEncryptedValue("My Assets", []byte(hash.String()), []byte(globals.FormatMoney(bal)))
+					if err != nil {
+						fmt.Printf("[Asset] Error storing new asset balance for: %s\n", hash)
+					}
+					balance.ParseMarkdown(globals.FormatMoney(bal))
+					balance.Refresh()
+				}
+
+				if bal != zerobal {
+					btnSend.Text = "Send Asset"
+					btnSend.Enable()
+					btnSend.Refresh()
+				} else {
+					btnSend.Text = "You do not own this asset"
+					btnSend.Disable()
+					btnSend.Refresh()
+				}
+			}()
+		}
+	}
+
+	bal, _, err := engram.Disk.GetDecryptedBalanceAtTopoHeight(hash, -1, engram.Disk.GetAddress().String())
+	if err == nil {
+
+		balance.ParseMarkdown(globals.FormatMoney(bal))
+		balance.Refresh()
+	}
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Asset Explorer", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		removeOverlays()
+		session.Domain = "app.explorer"
+	}
+
+	var image *canvas.Image
+	image = canvas.NewImageFromResource(resourceBlockGrayPng)
+	image.SetMinSize(fyne.NewSize(ui.Width*0.2, ui.Width*0.2))
+	image.FillMode = canvas.ImageFillContain
+
+	if icon != "" {
+		var path fyne.Resource
+		path, err = fyne.LoadResourceFromURLString(icon)
+		if err != nil {
+			image.Resource = resourceBlockGrayPng
+		} else {
+			image.Resource = path
+		}
+
+		image.SetMinSize(fyne.NewSize(ui.Width*0.2, ui.Width*0.2))
+		image.FillMode = canvas.ImageFillContain
+		image.Refresh()
+	}
+
+	if name == "" {
+		labelName.ParseMarkdown("## No name provided")
+	}
+
+	if desc == "" {
+		labelDesc.ParseMarkdown("No description provided")
+	}
+
+	if bal != zerobal {
+		btnSend.Text = "Send Asset"
+		btnSend.Enable()
+	} else {
+		btnSend.Text = "You do not own this asset"
+		btnSend.Disable()
+	}
+	btnSend.Refresh()
+
+	linkCopySigner := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	linkCopySigner.OnTapped = func() {
+		session.Window.Clipboard().SetContent(signer)
+	}
+
+	linkCopyOwner := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	linkCopyOwner.OnTapped = func() {
+		session.Window.Clipboard().SetContent(owner)
+	}
+
+	linkMessageAuthor := widget.NewHyperlinkWithStyle("Message the Author", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	linkMessageAuthor.OnTapped = func() {
+		if signer != "" && signer != "--" {
+			messages.Contact = signer
+			session.Window.Canvas().SetContent(layoutTransition())
+			removeOverlays()
+			session.Window.Canvas().SetContent(layoutPM())
+		}
+	}
+
+	linkMessageOwner := widget.NewHyperlinkWithStyle("Message the Owner", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	linkMessageOwner.OnTapped = func() {
+		if owner != "" && owner != "--" {
+			messages.Contact = owner
+			session.Window.Canvas().SetContent(layoutTransition())
+			removeOverlays()
+			session.Window.Canvas().SetContent(layoutPM())
+		}
+	}
+
+	linkCopySCID := widget.NewHyperlinkWithStyle("Copy SCID", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	linkCopySCID.OnTapped = func() {
+		session.Window.Clipboard().SetContent(scid)
+	}
+
+	linkView := widget.NewHyperlinkWithStyle("View in Explorer", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	linkView.OnTapped = func() {
+		if engram.Disk.GetNetwork() {
+			link, _ := url.Parse("https://explorer.dero.io/tx/" + scid)
+			_ = fyne.CurrentApp().OpenURL(link)
+		} else {
+			link, _ := url.Parse("https://testnetexplorer.dero.io/tx/" + scid)
+			_ = fyne.CurrentApp().OpenURL(link)
+		}
+	}
+
+	// Now let's parse the smart contract code for exported functions
+
+	var contract dvm.SmartContract
+
+	contract, _, err = dvm.ParseSmartContract(code)
+	if err != nil {
+		contract = dvm.SmartContract{}
+	}
+
+	data := []string{}
+
+	for f := range contract.Functions {
+		r, _ := utf8.DecodeRuneInString(contract.Functions[f].Name)
+
+		if !unicode.IsUpper(r) {
+			fmt.Printf("[DVM] Function %s is not an exported function - skipping it\n", contract.Functions[f].Name)
+		} else if contract.Functions[f].Name == "Initialize" || contract.Functions[f].Name == "InitializePrivate" {
+			fmt.Printf("[DVM] Function %s is an initialization function - skipping it\n", contract.Functions[f].Name)
+		} else {
+			data = append(data, contract.Functions[f].Name)
+		}
+	}
+
+	data = append(data, " ")
+
+	var paramList []fyne.Widget
+	var dero_amount uint64
+	var asset_amount uint64
+
+	functionList := widget.NewSelect(data, nil)
+	functionList.OnChanged = func(s string) {
+		if s == " " {
+			functionList.ClearSelected()
+			return
+		}
+
+		var params []dvm.Variable
+
+		overlay := session.Window.Canvas().Overlays()
+
+		for f := range contract.Functions {
+			if contract.Functions[f].Name == s {
+				params = contract.Functions[f].Params
+
+				header := canvas.NewText("EXECUTE  CONTRACT  FUNCTION", colors.Gray)
+				header.TextSize = 14
+				header.Alignment = fyne.TextAlignCenter
+				header.TextStyle = fyne.TextStyle{Bold: true}
+
+				funcName := canvas.NewText(s, colors.Account)
+				funcName.TextSize = 22
+				funcName.Alignment = fyne.TextAlignCenter
+				funcName.TextStyle = fyne.TextStyle{Bold: true}
+
+				linkClose := widget.NewHyperlinkWithStyle("Close", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+				linkClose.OnTapped = func() {
+					dero_amount = 0
+					asset_amount = 0
+					overlay.Top().Hide()
+					overlay.Remove(overlay.Top())
+					overlay.Remove(overlay.Top())
+				}
+
+				span := canvas.NewRectangle(color.Transparent)
+				span.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+				overlay.Add(
+					container.NewStack(
+						&iframe{},
+						canvas.NewRectangle(colors.DarkMatter),
+					),
+				)
+
+				entryDEROValue := widget.NewEntry()
+				entryDEROValue.PlaceHolder = "DERO Amount (Numbers Only)"
+				entryDEROValue.Validator = func(s string) error {
+					dero_amount, err = globals.ParseAmount(s)
+					if err != nil {
+						entryDEROValue.SetValidationError(err)
+						return err
+					}
+
+					return nil
+				}
+
+				entryAssetValue := widget.NewEntry()
+				entryAssetValue.PlaceHolder = "Asset Amount (Numbers Only)"
+				entryAssetValue.Validator = func(s string) error {
+					asset_amount, err = globals.ParseAmount(s)
+					if err != nil {
+						entryAssetValue.SetValidationError(err)
+						return err
+					}
+
+					return nil
+				}
+
+				a := container.NewStack(
+					span,
+					entryAssetValue,
+				)
+
+				d := container.NewStack(
+					span,
+					entryDEROValue,
+				)
+
+				paramsContainer := container.NewVBox()
+
+				// Scan code for ASSETVALUE and DEROVALUE
+				for l := range contract.Functions[f].Lines {
+					for i := range contract.Functions[f].Lines[l] {
+						existsDEROValue := false
+						existsAssetValue := false
+
+						for v := range paramList {
+							if paramList[v] == entryDEROValue {
+								existsDEROValue = true
+							} else if paramList[v] == entryAssetValue {
+								existsAssetValue = true
+							}
+						}
+
+						if strings.Contains(contract.Functions[f].Lines[l][i], "DEROVALUE") && !existsDEROValue {
+							paramList = append(paramList, entryDEROValue)
+							paramsContainer.Add(d)
+							paramsContainer.Refresh()
+						}
+
+						if strings.Contains(contract.Functions[f].Lines[l][i], "ASSETVALUE") && !existsAssetValue {
+							paramList = append(paramList, entryAssetValue)
+							paramsContainer.Add(a)
+							paramsContainer.Refresh()
+							break
+						}
+					}
+				}
+
+				btnExecute := widget.NewButton("Execute", nil)
+
+				overlay.Add(
+					container.NewStack(
+						&iframe{},
+						container.NewCenter(
+							container.NewVBox(
+								span,
+								container.NewCenter(
+									header,
+								),
+								rectSpacer,
+								rectSpacer,
+								container.NewCenter(
+									funcName,
+								),
+								wSpacer,
+								paramsContainer,
+								wSpacer,
+								btnExecute,
+								rectSpacer,
+								rectSpacer,
+								container.NewHBox(
+									layout.NewSpacer(),
+									linkClose,
+									layout.NewSpacer(),
+								),
+								rectSpacer,
+								rectSpacer,
+							),
+						),
+					),
+				)
+
+				for p := range params {
+					entry := widget.NewEntry()
+					entry.PlaceHolder = params[p].Name
+					if params[p].Type == 0x4 {
+						entry.PlaceHolder = params[p].Name + " (Numbers Only)"
+					}
+					entry.Validator = func(s string) error {
+						for p := range params {
+							if params[p].Type == 0x5 {
+								if params[p].Name == entry.PlaceHolder {
+									fmt.Printf("[%s] String: %s\n", params[p].Name, s)
+									params[p].ValueString = s
+								}
+							} else if params[p].Type == 0x4 {
+								if params[p].Name+" (Numbers Only)" == entry.PlaceHolder {
+									amount, err := globals.ParseAmount(s)
+									if err != nil {
+										fmt.Printf("[%s] Err: %s\n", params[p].Name, err)
+										entry.SetValidationError(err)
+										return err
+									} else {
+										fmt.Printf("[%s] Amount: %d\n", params[p].Name, amount)
+										params[p].ValueUint64 = amount
+									}
+								}
+							}
+						}
+
+						return nil
+					}
+
+					c := container.NewStack(
+						span,
+						entry,
+					)
+
+					paramList = append(paramList, entry)
+					paramsContainer.Add(c)
+					paramsContainer.Refresh()
+
+				}
+
+				btnExecute.OnTapped = func() {
+					var funcType rpc.DataType
+					for f := range contract.Functions {
+						if contract.Functions[f].Name == funcName.Text {
+							params = contract.Functions[f].Params
+
+							if contract.Functions[f].ReturnValue.Type == 0x4 {
+								funcType = rpc.DataUint64
+							} else {
+								funcType = rpc.DataUint64
+							}
+						}
+					}
+
+					err = executeContractFunction(hash, dero_amount, asset_amount, funcName.Text, funcType, params)
+					if err != nil {
+						btnExecute.Text = "Error executing function..."
+						btnExecute.Disable()
+						btnExecute.Refresh()
+					} else {
+						btnExecute.Text = "Function executed successfully!"
+						btnExecute.Disable()
+						btnExecute.Refresh()
+					}
+				}
+
+				paramsContainer.Refresh()
+				overlay.Top().Show()
+				functionList.ClearSelected()
+			}
+		}
+	}
+
+	center := container.NewStack(
+		rectBox,
+		container.NewVScroll(
+			container.NewStack(
+				rectWidth90,
+				container.NewHBox(
+					layout.NewSpacer(),
+					container.NewVBox(
+						container.NewHBox(
+							image,
+							rectSpacer,
+							container.NewVBox(
+								layout.NewSpacer(),
+								labelName,
+								layout.NewSpacer(),
+							),
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+						labelDesc,
+						rectSpacer,
+						rectSpacer,
+						labelSigner,
+						rectSpacer,
+						textSigner,
+						container.NewHBox(
+							linkMessageAuthor,
+							layout.NewSpacer(),
+						),
+						container.NewHBox(
+							linkCopySigner,
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+						labelOwner,
+						rectSpacer,
+						textOwner,
+						container.NewHBox(
+							linkMessageOwner,
+							layout.NewSpacer(),
+						),
+						container.NewHBox(
+							linkCopyOwner,
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+						labelSCID,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							sc,
+						),
+						container.NewHBox(
+							linkView,
+							layout.NewSpacer(),
+						),
+						container.NewHBox(
+							linkCopySCID,
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+						rectSpacer,
+						labelBalance,
+						rectSpacer,
+						balance,
+						rectSpacer,
+						entryAddress,
+						rectSpacer,
+						entryAmount,
+						rectSpacer,
+						btnSend,
+						rectSpacer,
+						rectSpacer,
+						rectSpacer,
+						labelExecute,
+						rectSpacer,
+						functionList,
+						wSpacer,
 					),
 					layout.NewSpacer(),
 				),
-				rectSpacer,
 			),
 		),
+		rectSpacer,
+		rectSpacer,
 	)
+
+	top := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			rectSpacer,
+			rectSpacer,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	layout := container.NewStack(
+		frame,
+		container.NewBorder(
+			top,
+			bottom,
+			nil,
+			center,
+		),
+	)
+
 	return layout
 }
 
 func layoutTransfers() fyne.CanvasObject {
 	resetResources()
+	session.Domain = "app.transfers"
 
 	wSpacer := widget.NewLabel(" ")
 	sendTitle := canvas.NewText("T R A N S F E R S", colors.Gray)
@@ -2697,42 +4344,51 @@ func layoutTransfers() fyne.CanvasObject {
 	sendHeading.Alignment = fyne.TextAlignCenter
 	sendHeading.TextStyle = fyne.TextStyle{Bold: true}
 
-	rectSynapse := canvas.NewRectangle(color.Transparent)
-	rectSynapse.SetMinSize(fyne.NewSize(75, 75))
-	rectCenter := canvas.NewRectangle(colors.DarkMatter)
-	rectCenter.FillColor = colors.DarkMatter
-	rectCenter.SetMinSize(fyne.NewSize(10, 10))
-	rectUp := canvas.NewRectangle(colors.Green)
-	rectUp.SetMinSize(fyne.NewSize(10, 10))
-	rectDown := canvas.NewRectangle(colors.DarkMatter)
-	rectDown.SetMinSize(fyne.NewSize(10, 10))
-	rectLeft := canvas.NewRectangle(colors.DarkMatter)
-	rectLeft.SetMinSize(fyne.NewSize(10, 10))
-	rectRight := canvas.NewRectangle(colors.DarkMatter)
-	rectRight.SetMinSize(fyne.NewSize(10, 10))
 	rectStatus := canvas.NewRectangle(color.Transparent)
 	rectStatus.SetMinSize(fyne.NewSize(10, 10))
 	rect := canvas.NewRectangle(color.Transparent)
-	rect.SetMinSize(fyne.NewSize(MIN_WIDTH, 20))
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
-	rect.SetMinSize(fyne.NewSize(300, 30))
+	rect.SetMinSize(fyne.NewSize(ui.Width, 20))
+	frame := &iframe{}
+	rect.SetMinSize(fyne.NewSize(ui.Width, 30))
 	rectSpacer := canvas.NewRectangle(color.Transparent)
 	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
 	rect.SetMinSize(fyne.NewSize(10, 10))
 	rectEmpty := canvas.NewRectangle(color.Transparent)
 	rectEmpty.SetMinSize(fyne.NewSize(10, 10))
 	rectList := canvas.NewRectangle(color.Transparent)
-	rectList.SetMinSize(fyne.NewSize(300, 35))
+	rectList.SetMinSize(fyne.NewSize(ui.Width, 35))
 	rectListBox := canvas.NewRectangle(color.Transparent)
-	rectListBox.SetMinSize(fyne.NewSize(300, 200))
+	rectListBox.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.43))
 
-	res.gram.SetMinSize(fyne.NewSize(300, 185))
-	res.gram_footer.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_header.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.home_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.nft_footer.SetMinSize(fyne.NewSize(300, 20))
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Dashboard", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
+	}
 
 	var pendingList []string
 
@@ -2744,14 +4400,12 @@ func layoutTransfers() fyne.CanvasObject {
 
 	scrollBox := widget.NewListWithData(data,
 		func() fyne.CanvasObject {
-			c := container.NewMax(
+			c := container.NewStack(
 				rectList,
 				container.NewHBox(
 					canvas.NewText("", colors.Account),
 					layout.NewSpacer(),
 					canvas.NewText("", colors.Account),
-					layout.NewSpacer(),
-					widget.NewButton("X", nil),
 				),
 			)
 			return c
@@ -2764,74 +4418,181 @@ func layoutTransfers() fyne.CanvasObject {
 			}
 			dataItem := strings.SplitN(str, ",", 3)
 			dest := dataItem[2]
-			dest = " ..." + dest[len(dataItem[2])-5:]
-			index, _ := strconv.Atoi(dataItem[0])
-			//co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*widget.Label).Bind(dataItem[0])
+			dest = "   " + dest[0:4] + " ... " + dest[len(dataItem[2])-10:]
 			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*canvas.Text).Text = dest
 			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*canvas.Text).TextSize = 17
 			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*canvas.Text).TextStyle.Bold = true
-			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[2].(*canvas.Text).Text = dataItem[1]
+			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[2].(*canvas.Text).Text = dataItem[1] + "   "
 			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[2].(*canvas.Text).TextSize = 17
 			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[2].(*canvas.Text).TextStyle.Bold = true
-			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[4].(*widget.Button).OnTapped = func() {
-				if len(pendingList) > index+1 {
-					pendingList = append(pendingList[:index], pendingList[index+1:]...)
-					tx.Pending = append(tx.Pending[:index], tx.Pending[index+1:]...)
-					data.Reload()
-				} else if len(pendingList) == 1 {
-					pendingList = pendingList[:0]
-					tx = Transfers{}
-					data.Reload()
-				} else {
-					pendingList = append(pendingList[:index])
-					tx.Pending = append(tx.Pending[:index])
-					data.Reload()
-				}
-			}
 		})
 
 	scrollBox.OnSelected = func(id widget.ListItemID) {
-		scrollBox.UnselectAll()
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutTransfersDetail(id))
 	}
 
-	btnSend := widget.NewButton("Send All", func() {
-		if len(tx.Pending) == 0 {
-			return
-		} else {
-			err := sendTransfers()
-			if err != nil {
-				return
-			}
+	btnSend := widget.NewButton("Send All", nil)
 
-			pendingList = pendingList[:0]
-			data.Reload()
-		}
-	})
-
-	btnHistory := widget.NewButton("View History", func() {
-		if history.Window != nil {
-			history.Window.Show()
-		} else {
-			history.Window = fyne.CurrentApp().NewWindow("View History")
-			history.Window.SetCloseIntercept(func() {
-				history.Window.Close()
-				history.Window = nil
-			})
-			history.Window.Resize(fyne.NewSize(800, MIN_HEIGHT))
-			history.Window.SetFixedSize(true)
-			history.Window.SetContent(layoutHistory())
-			history.Window.Show()
-		}
-	})
-
-	btnCancel := widget.NewButton("Clear", func() {
+	btnClear := widget.NewButton("Clear", func() {
 		pendingList = pendingList[:0]
 		tx = Transfers{}
-		data.Reload()
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutTransfers())
 	})
 
+	if len(pendingList) > 0 {
+		btnClear.Enable()
+		btnSend.Enable()
+	} else {
+		btnClear.Disable()
+		btnSend.Disable()
+	}
+
+	if session.Offline {
+		btnSend.Text = "Disabled in Offline Mode"
+		btnSend.Disable()
+	}
+
+	btnSend.OnTapped = func() {
+		overlay := session.Window.Canvas().Overlays()
+
+		header := canvas.NewText("ACCOUNT  VERIFICATION  REQUIRED", colors.Gray)
+		header.TextSize = 14
+		header.Alignment = fyne.TextAlignCenter
+		header.TextStyle = fyne.TextStyle{Bold: true}
+
+		subHeader := canvas.NewText("Confirm Password", colors.Account)
+		subHeader.TextSize = 22
+		subHeader.Alignment = fyne.TextAlignCenter
+		subHeader.TextStyle = fyne.TextStyle{Bold: true}
+
+		linkClose := widget.NewHyperlinkWithStyle("Cancel", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+		linkClose.OnTapped = func() {
+			overlay := session.Window.Canvas().Overlays()
+			overlay.Top().Hide()
+			overlay.Remove(overlay.Top())
+			overlay.Remove(overlay.Top())
+		}
+
+		btnSubmit := widget.NewButton("Submit", nil)
+
+		entryPassword := widget.NewEntry()
+		entryPassword.Password = true
+		entryPassword.PlaceHolder = "Password"
+		entryPassword.OnChanged = func(s string) {
+			if s == "" {
+				btnSubmit.Text = "Submit"
+				btnSubmit.Disable()
+				btnSubmit.Refresh()
+			} else {
+				btnSubmit.Text = "Submit"
+				btnSubmit.Enable()
+				btnSubmit.Refresh()
+			}
+		}
+
+		btnSubmit.OnTapped = func() {
+			if engram.Disk.Check_Password(entryPassword.Text) {
+				removeOverlays()
+				if len(tx.Pending) == 0 {
+					return
+				} else {
+					btnSend.Text = "Setting up transfer..."
+					btnSend.Disable()
+					btnSend.Refresh()
+					txid, err := sendTransfers()
+					if err != nil {
+						btnSend.Text = "Send All"
+						btnSend.Enable()
+						btnSend.Refresh()
+						return
+					}
+
+					go func() {
+						btnClear.Disable()
+						btnSend.Text = "Confirming..."
+						btnSend.Refresh()
+
+						walletapi.WaitNewHeightBlock()
+
+						for session.Domain == "app.transfers" {
+							result := engram.Disk.Get_Payments_TXID(txid.String())
+
+							if result.TXID == txid.String() {
+								btnSend.Text = "Transfer Successful!"
+								btnSend.Refresh()
+
+								break
+							}
+
+							time.Sleep(time.Second * 1)
+						}
+					}()
+
+					pendingList = pendingList[:0]
+					data.Reload()
+					btnSend.Disable()
+					btnClear.Disable()
+				}
+			} else {
+				btnSubmit.Text = "Invalid Password..."
+				btnSubmit.Disable()
+				btnSubmit.Refresh()
+			}
+		}
+
+		btnSubmit.Disable()
+
+		span := canvas.NewRectangle(color.Transparent)
+		span.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+		overlay.Add(
+			container.NewStack(
+				&iframe{},
+				canvas.NewRectangle(colors.DarkMatter),
+			),
+		)
+
+		overlay.Add(
+			container.NewStack(
+				&iframe{},
+				container.NewCenter(
+					container.NewVBox(
+						span,
+						container.NewCenter(
+							header,
+						),
+						rectSpacer,
+						rectSpacer,
+						subHeader,
+						widget.NewLabel(""),
+						container.NewCenter(
+							container.NewStack(
+								span,
+								entryPassword,
+							),
+						),
+						rectSpacer,
+						rectSpacer,
+						btnSubmit,
+						rectSpacer,
+						rectSpacer,
+						container.NewHBox(
+							layout.NewSpacer(),
+							linkClose,
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+					),
+				),
+			),
+		)
+	}
+
 	session.Window.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
-		if session.Domain != "app.wallet" {
+		if session.Domain != "app.transfers" {
 			return
 		}
 
@@ -2840,42 +4601,25 @@ func layoutTransfers() fyne.CanvasObject {
 
 			session.Window.SetContent(layoutTransition())
 			session.Window.SetContent(layoutDashboard())
+			removeOverlays()
 		}
 	})
 
-	synapse := container.NewMax(
-		rectSynapse,
-		container.NewGridWithColumns(3,
-			rectEmpty,
-			rectUp,
-			rectEmpty,
-			rectLeft,
-			rectCenter,
-			rectRight,
-			rectEmpty,
-			rectDown,
-			rectEmpty,
-		),
-	)
-
 	sendForm := container.NewVBox(
 		wSpacer,
-		container.NewCenter(res.rpc_header, container.NewVBox(sendTitle, rectSpacer)),
-		rectSpacer,
 		sendHeading,
 		rectSpacer,
-		//sendDesc,
 		wSpacer,
-		container.NewMax(
+		container.NewStack(
 			rectListBox,
 			scrollBox,
 		),
 		wSpacer,
 		btnSend,
-		btnHistory,
-		btnCancel,
-		wSpacer,
-		res.rpc_footer,
+		rectSpacer,
+		btnClear,
+		rectSpacer,
+		rectSpacer,
 	)
 
 	gridItem1 := container.NewCenter(
@@ -2905,43 +4649,41 @@ func layoutTransfers() fyne.CanvasObject {
 		layout.NewSpacer(),
 	)
 
-	subContainer := container.NewMax(
+	bottom := container.NewStack(
 		container.NewVBox(
-			container.NewCenter(
-				rectSynapse,
-				synapse,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
 			),
 			rectSpacer,
-			container.NewHBox(
+			rectSpacer,
+			container.NewCenter(
 				layout.NewSpacer(),
-				container.NewMax(
-					rectStatus,
-					status.Connection,
-				),
-				widget.NewLabel(""),
-				container.NewMax(
-					rectStatus,
-					status.Sync,
-				),
-				widget.NewLabel(""),
-				container.NewMax(
-					rectStatus,
-					status.Cyberdeck,
-				),
+				linkBack,
 				layout.NewSpacer(),
 			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
 			rectSpacer,
 		),
 	)
 
 	c := container.NewBorder(
 		features,
-		subContainer,
+		bottom,
 		nil,
 		nil,
 	)
 
-	layout := container.NewMax(
+	layout := container.NewStack(
 		frame,
 		c,
 	)
@@ -2949,173 +4691,434 @@ func layoutTransfers() fyne.CanvasObject {
 	return layout
 }
 
+func layoutTransfersDetail(index int) fyne.CanvasObject {
+	resetResources()
+
+	wSpacer := widget.NewLabel(" ")
+
+	rectWidth := canvas.NewRectangle(color.Transparent)
+	rectWidth.SetMinSize(fyne.NewSize(ui.MaxWidth*0.99, 10))
+
+	rectWidth90 := canvas.NewRectangle(color.Transparent)
+	rectWidth90.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+	frame := &iframe{}
+
+	heading := canvas.NewText("T R A N S F E R    D E T A I L", colors.Gray)
+	heading.TextSize = 16
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(6, 5))
+
+	labelDestination := canvas.NewText("RECEIVER  ADDRESS", colors.Gray)
+	labelDestination.TextSize = 11
+	labelDestination.Alignment = fyne.TextAlignLeading
+	labelDestination.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelAmount := canvas.NewText("AMOUNT", colors.Gray)
+	labelAmount.TextSize = 11
+	labelAmount.Alignment = fyne.TextAlignLeading
+	labelAmount.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelService := canvas.NewText("SERVICE  ADDRESS", colors.Gray)
+	labelService.TextSize = 11
+	labelService.Alignment = fyne.TextAlignLeading
+	labelService.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelDestPort := canvas.NewText("DESTINATION  PORT", colors.Gray)
+	labelDestPort.TextSize = 11
+	labelDestPort.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelSourcePort := canvas.NewText("SOURCE  PORT", colors.Gray)
+	labelSourcePort.TextSize = 11
+	labelSourcePort.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelFees := canvas.NewText("TRANSACTION  FEES", colors.Gray)
+	labelFees.TextSize = 11
+	labelFees.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelPayload := canvas.NewText("PAYLOAD", colors.Gray)
+	labelPayload.TextSize = 11
+	labelPayload.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelReply := canvas.NewText("REPLY  ADDRESS", colors.Gray)
+	labelReply.TextSize = 11
+	labelReply.TextStyle = fyne.TextStyle{Bold: true}
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	details := tx.Pending[index]
+
+	valueDestination := widget.NewRichTextFromMarkdown("--")
+	valueDestination.Wrapping = fyne.TextWrapBreak
+
+	valueType := widget.NewRichTextFromMarkdown("--")
+	valueType.Wrapping = fyne.TextWrapOff
+
+	if details.Destination != "" {
+		address, _ := globals.ParseValidateAddress(details.Destination)
+		if address.IsIntegratedAddress() {
+			valueDestination.ParseMarkdown(address.BaseAddress().String())
+			valueType.ParseMarkdown("### SERVICE")
+		} else {
+			valueDestination.ParseMarkdown(details.Destination)
+			valueType.ParseMarkdown("### NORMAL")
+		}
+	}
+
+	valueReply := widget.NewRichTextFromMarkdown("--")
+	valueReply.Wrapping = fyne.TextWrapBreak
+
+	if details.Payload_RPC.HasValue(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString) {
+		if details.Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string) != "" {
+			valueReply.ParseMarkdown("" + details.Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string))
+		}
+	}
+
+	valuePayload := widget.NewRichTextFromMarkdown("--")
+	valuePayload.Wrapping = fyne.TextWrapBreak
+
+	if details.Payload_RPC.HasValue(rpc.RPC_COMMENT, rpc.DataString) {
+		if details.Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string) != "" {
+			valuePayload.ParseMarkdown("" + details.Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string))
+		}
+	}
+
+	valueAmount := canvas.NewText("", colors.Account)
+	valueAmount.TextSize = 22
+	valueAmount.TextStyle = fyne.TextStyle{Bold: true}
+	valueAmount.Text = " " + globals.FormatMoney(details.Amount)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Transfers", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutTransfers())
+	}
+
+	btnDelete := widget.NewButton("Cancel Transfer", nil)
+	btnDelete.OnTapped = func() {
+		if len(tx.Pending) > index+1 {
+			tx.Pending = append(tx.Pending[:index], tx.Pending[index+1:]...)
+		} else if len(tx.Pending) == 1 {
+			tx = Transfers{}
+		} else {
+			tx.Pending = append(tx.Pending[:index])
+		}
+
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutTransfers())
+	}
+
+	top := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			heading,
+		),
+		rectSpacer,
+		container.NewCenter(
+			valueType,
+		),
+		rectSpacer,
+		rectSpacer,
+	)
+
+	center := container.NewStack(
+		container.NewVScroll(
+			container.NewStack(
+				rectWidth,
+				container.NewHBox(
+					layout.NewSpacer(),
+					container.NewVBox(
+						rectSpacer,
+						rectSpacer,
+						labelDestination,
+						rectSpacer,
+						valueDestination,
+						rectSpacer,
+						rectSpacer,
+						labelAmount,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							valueAmount,
+						),
+						rectSpacer,
+						rectSpacer,
+						labelReply,
+						rectSpacer,
+						valueReply,
+						rectSpacer,
+						rectSpacer,
+						labelPayload,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							valuePayload,
+						),
+						wSpacer,
+					),
+					layout.NewSpacer(),
+				),
+			),
+		),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			rectSpacer,
+			rectSpacer,
+			container.NewStack(
+				rectWidth,
+				container.NewHBox(
+					layout.NewSpacer(),
+					container.NewStack(
+						rectWidth90,
+						btnDelete,
+					),
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	layout := container.NewStack(
+		frame,
+		container.NewBorder(
+			top,
+			bottom,
+			nil,
+			center,
+		),
+	)
+
+	return layout
+}
+
 func layoutTransition() fyne.CanvasObject {
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
-	layout := container.NewMax(frame)
-	resizeWindow(MIN_WIDTH, MIN_HEIGHT)
+	frame := &iframe{}
+	resizeWindow(ui.MaxWidth, ui.MaxHeight)
+
+	rect := canvas.NewRectangle(color.Transparent)
+	rect.SetMinSize(fyne.NewSize(ui.Width*0.45, ui.Width*0.45))
+
+	if res.loading == nil {
+		res.loading, _ = x.NewAnimatedGifFromResource(resourceLoadingGif)
+		res.loading.SetMinSize(fyne.NewSize(ui.Width*0.45, ui.Width*0.45))
+		res.loading.Resize(fyne.NewSize(ui.Width*0.45, ui.Width*0.45))
+	}
+
+	res.loading.Start()
+
+	layout := container.NewStack(
+		frame,
+		container.NewCenter(
+			rect,
+			res.loading,
+		),
+	)
 
 	return layout
 }
 
 func layoutSettings() fyne.CanvasObject {
 	resetResources()
+	stopGnomon()
 
 	rect := canvas.NewRectangle(color.Transparent)
-	rect.SetMinSize(fyne.NewSize(200, 233))
+	rect.SetMinSize(fyne.NewSize(ui.Width, 10))
 	rectScroll := canvas.NewRectangle(color.Transparent)
-	rectScroll.SetMinSize(fyne.NewSize(300, 450))
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
+	rectScroll.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.65))
+	frame := &iframe{}
 	rectSpacer := canvas.NewRectangle(color.Transparent)
 	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
 
-	title := canvas.NewText("S E T T I N G S", colors.Gray)
-	title.TextStyle = fyne.TextStyle{Bold: true}
-	title.TextSize = 16
-
-	heading := canvas.NewText("My Options", colors.Green)
+	heading := canvas.NewText("My Settings", colors.Green)
 	heading.TextSize = 22
 	heading.Alignment = fyne.TextAlignCenter
 	heading.TextStyle = fyne.TextStyle{Bold: true}
 
-	catNetwork := canvas.NewText("NETWORK", colors.Gray)
-	catNetwork.TextStyle = fyne.TextStyle{Bold: true}
-	catNetwork.TextSize = 14
+	labelNetwork := canvas.NewText("NETWORK", colors.Gray)
+	labelNetwork.TextStyle = fyne.TextStyle{Bold: true}
+	labelNetwork.TextSize = 14
 
-	catNode := canvas.NewText("CONNECTION", colors.Gray)
-	catNode.TextStyle = fyne.TextStyle{Bold: true}
-	catNode.TextSize = 14
+	labelNode := canvas.NewText("CONNECTION", colors.Gray)
+	labelNode.TextStyle = fyne.TextStyle{Bold: true}
+	labelNode.TextSize = 14
 
-	catSecurity := canvas.NewText("SECURITY", colors.Gray)
-	catSecurity.TextStyle = fyne.TextStyle{Bold: true}
-	catSecurity.TextSize = 14
+	labelSecurity := canvas.NewText("SECURITY", colors.Gray)
+	labelSecurity.TextStyle = fyne.TextStyle{Bold: true}
+	labelSecurity.TextSize = 14
 
-	catGnomon := canvas.NewText("GNOMON", colors.Gray)
-	catGnomon.TextStyle = fyne.TextStyle{Bold: true}
-	catGnomon.TextSize = 14
+	labelGnomon := canvas.NewText("GNOMON", colors.Gray)
+	labelGnomon.TextStyle = fyne.TextStyle{Bold: true}
+	labelGnomon.TextSize = 14
 
-	cg := widget.NewRichTextWithText("Gnomon scans and indexes blockchain data in order to unlock more features, like native asset tracking.")
-	cg.Wrapping = fyne.TextWrapWord
+	textGnomon := widget.NewRichTextWithText("Gnomon scans and indexes blockchain data in order to unlock more features, like native asset tracking.")
+	textGnomon.Wrapping = fyne.TextWrapWord
 
-	cd := widget.NewRichTextWithText("A username and password is required in order to allow application connectivity.")
-	cd.Wrapping = fyne.TextWrapWord
+	textCyberdeck := widget.NewRichTextWithText("A username and password is required in order to allow application connectivity.")
+	textCyberdeck.Wrapping = fyne.TextWrapWord
 
-	btnCancel := widget.NewButton("Back", nil)
 	btnRestore := widget.NewButton("Restore Defaults", nil)
+	btnDelete := widget.NewButton("Clear Local Data", nil)
 
-	address := widget.NewEntry()
-	address.OnChanged = func(s string) {
-		setDaemon(s)
-	}
-	address.PlaceHolder = "Daemon Address"
-	address.SetText(getDaemon())
-	address.Refresh()
+	scrollBox := container.NewVScroll(nil)
 
-	network := widget.NewRadioGroup([]string{"Mainnet", "Testnet"}, nil)
-	network.Horizontal = false
-	//network.Required = true
-	network.OnChanged = func(s string) {
-		if s == "Testnet" {
-			setNetwork(false)
+	entryAddress := widget.NewEntry()
+	entryAddress.Validator = func(s string) (err error) {
+		/*
+			_, err := net.ResolveTCPAddr("tcp", s)
+		*/
+		regex := `^(?:[a-zA-Z0-9]{1,62}(?:[-\.][a-zA-Z0-9]{1,62})+)(:\d+)?$`
+		test := regexp.MustCompile(regex)
+
+		if test.MatchString(s) {
+			entryAddress.SetValidationError(nil)
+			setDaemon(s)
 		} else {
-			setNetwork(true)
+			err = errors.New("invalid host name")
+			entryAddress.SetValidationError(err)
 		}
+
+		return
+	}
+	entryAddress.PlaceHolder = "0.0.0.0:10102"
+	entryAddress.SetText(getDaemon())
+	entryAddress.Refresh()
+
+	selectNodes := widget.NewSelect(nil, nil)
+	selectNodes.PlaceHolder = "Select Public Node ..."
+	if session.Testnet {
+		selectNodes.Options = []string{"testnetexplorer.dero.io:40402", "127.0.0.1:40402"}
+	} else {
+		selectNodes.Options = []string{"node.derofoundation.org:11012", "127.0.0.1:10102"}
+	}
+	selectNodes.OnChanged = func(s string) {
+		if s != "" {
+			err := setDaemon(s)
+			if err == nil {
+				entryAddress.Text = s
+				entryAddress.Refresh()
+			}
+			selectNodes.ClearSelected()
+		}
+	}
+
+	labelScan := widget.NewRichTextFromMarkdown("Enter the number of past blocks that the wallet should scan:")
+	labelScan.Wrapping = fyne.TextWrapWord
+
+	entryScan := widget.NewEntry()
+	entryScan.PlaceHolder = "# of Latest Blocks (Optional)"
+	entryScan.Validator = func(s string) (err error) {
+		blocks, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			entryScan.SetValidationError(err)
+		} else {
+			entryScan.SetValidationError(nil)
+			if blocks > 0 {
+				session.TrackRecentBlocks = blocks
+			} else {
+				session.TrackRecentBlocks = 0
+			}
+		}
+
+		return
+	}
+
+	if session.TrackRecentBlocks > 0 {
+		blocks := strconv.FormatInt(session.TrackRecentBlocks, 10)
+		entryScan.Text = blocks
+		entryScan.Refresh()
+	}
+
+	radioNetwork := widget.NewRadioGroup([]string{"Mainnet", "Testnet"}, nil)
+	radioNetwork.Horizontal = false
+	radioNetwork.OnChanged = func(s string) {
+		if s == "Testnet" {
+			setTestnet(true)
+			selectNodes.Options = []string{"testnetexplorer.dero.io:40402", "127.0.0.1:40402"}
+		} else {
+			setTestnet(false)
+			selectNodes.Options = []string{"node.derofoundation.org:11012", "127.0.0.1:10102"}
+		}
+
+		selectNodes.Refresh()
 	}
 
 	net, _ := GetValue("settings", []byte("network"))
 
 	if string(net) == "Testnet" {
-		network.SetSelected("Testnet")
+		radioNetwork.SetSelected("Testnet")
 	} else {
-		network.SetSelected("Mainnet")
+		radioNetwork.SetSelected("Mainnet")
 	}
 
-	network.Refresh()
+	radioNetwork.Refresh()
 
-	nodeType := widget.NewRadioGroup([]string{"Remote", "Local"}, nil)
-	nodeType.Horizontal = false
-	nodeType.Required = true
-	nodeType.OnChanged = func(s string) {
-		if s == "Local" {
-			if string(net) == "Testnet" {
-				setType("Local")
-				setDaemon(DEFAULT_LOCAL_TESTNET_DAEMON)
-				address.SetText(DEFAULT_LOCAL_TESTNET_DAEMON)
-				address.Disable()
-				address.Refresh()
-			} else {
-				setType("Remote")
-				address.SetText(DEFAULT_LOCAL_DAEMON)
-				address.Enable()
-				address.Refresh()
-			}
-		} else {
-			address.SetText(getDaemon())
-			address.Enable()
-			address.Refresh()
-		}
-	}
+	entryUser := widget.NewEntry()
+	entryUser.PlaceHolder = "Username"
+	entryUser.SetText(cyberdeck.user)
 
-	t := getType()
-	if t == "Remote" {
-		nodeType.SetSelected("Remote")
-		nodeType.Refresh()
-	} else {
-		nodeType.SetSelected("Local")
-		nodeType.Refresh()
-	}
+	entryPass := widget.NewEntry()
+	entryPass.PlaceHolder = "Password"
+	entryPass.Password = true
+	entryPass.SetText(cyberdeck.pass)
 
-	user := widget.NewEntry()
-	user.PlaceHolder = "Username"
-	user.SetText(cyberdeck.user)
-
-	pass := widget.NewEntry()
-	pass.PlaceHolder = "Password"
-	pass.Password = true
-	pass.SetText(cyberdeck.pass)
-
-	user.OnChanged = func(s string) {
+	entryUser.OnChanged = func(s string) {
 		cyberdeck.user = s
 	}
 
-	pass.OnChanged = func(s string) {
+	entryPass.OnChanged = func(s string) {
 		cyberdeck.pass = s
-	}
-
-	checkbox := widget.NewCheck("Use Authenticator", nil)
-	checkbox.OnChanged = func(b bool) {
-		if b {
-			StoreValue("settings", []byte("auth_mode"), []byte("true"))
-			checkbox.Checked = true
-			cyberdeck.mode = 1
-			user.Disable()
-			pass.Disable()
-		} else {
-			StoreValue("settings", []byte("auth_mode"), []byte("false"))
-			checkbox.Checked = false
-			cyberdeck.mode = 0
-			user.Enable()
-			pass.Enable()
-		}
-	}
-
-	mode, err := GetValue("settings", []byte("auth_mode"))
-	if err != nil {
-		StoreValue("settings", []byte("auth_mode"), []byte("true"))
-		checkbox.Checked = true
-	} else {
-		if string(mode) == "true" {
-			checkbox.Checked = true
-			cyberdeck.mode = 1
-			user.Disable()
-			pass.Disable()
-		} else {
-			checkbox.Checked = false
-			cyberdeck.mode = 0
-			user.Enable()
-			pass.Enable()
-		}
 	}
 
 	checkGnomon := widget.NewCheck("Enable Gnomon", nil)
@@ -3144,75 +5147,96 @@ func layoutSettings() fyne.CanvasObject {
 		checkGnomon.Checked = false
 	}
 
-	btnCancel.OnTapped = func() {
-		if network.Selected == "Testnet" {
-			setNetwork(false)
+	labelBack := widget.NewHyperlinkWithStyle("Return to Login", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	labelBack.OnTapped = func() {
+		if radioNetwork.Selected == "Testnet" {
+			setTestnet(true)
 		} else {
-			setNetwork(true)
+			setTestnet(false)
 		}
-		setType(nodeType.Selected)
-		setDaemon(address.Text)
+		setDaemon(entryAddress.Text)
 
-		resizeWindow(MIN_WIDTH, MIN_HEIGHT)
+		initSettings()
+
+		resizeWindow(ui.MaxWidth, ui.MaxHeight)
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutMain())
+		removeOverlays()
 	}
 
 	btnRestore.OnTapped = func() {
-		setNetwork(true)
-		setType("Remote")
+		setTestnet(false)
 		setDaemon(DEFAULT_REMOTE_DAEMON)
 		setAuthMode("true")
 		setGnomon("1")
 
-		resizeWindow(MIN_WIDTH, MIN_HEIGHT)
+		resizeWindow(ui.MaxWidth, ui.MaxHeight)
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutSettings())
+		removeOverlays()
 	}
 
-	res.gram.SetMinSize(fyne.NewSize(300, 185))
-	res.gram_footer.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_header.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.home_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.nft_footer.SetMinSize(fyne.NewSize(300, 20))
+	statusText := canvas.NewText("", colors.Account)
+	statusText.TextSize = 12
+
+	btnDelete.OnTapped = func() {
+		err := cleanGnomonData()
+		if err != nil {
+			statusText.Color = colors.Red
+			statusText.Text = err.Error()
+			statusText.Refresh()
+			return
+		}
+
+		statusText.Color = colors.Green
+		statusText.Text = "Gnomon data successfully deleted."
+		statusText.Refresh()
+	}
 
 	formSettings := container.NewVBox(
-		catNetwork,
+		labelNetwork,
 		rectSpacer,
-		network,
+		radioNetwork,
 		widget.NewLabel(""),
-		catNode,
+		labelNode,
 		rectSpacer,
-		nodeType,
 		rectSpacer,
-		address,
+		selectNodes,
+		rectSpacer,
+		entryAddress,
+		rectSpacer,
+		rectSpacer,
+		labelScan,
+		rectSpacer,
+		entryScan,
 		widget.NewLabel(""),
-		catSecurity,
+		labelSecurity,
 		rectSpacer,
-		cd,
+		textCyberdeck,
 		rectSpacer,
-		user,
+		entryUser,
 		rectSpacer,
-		pass,
+		entryPass,
 		rectSpacer,
-		checkbox,
 		widget.NewLabel(""),
-		catGnomon,
+		labelGnomon,
 		rectSpacer,
-		cg,
+		textGnomon,
 		rectSpacer,
 		checkGnomon,
-		widget.NewLabel(""),
-		widget.NewLabel(""),
-		widget.NewLabel(""),
+		rectSpacer,
+		statusText,
+		rectSpacer,
+		rectSpacer,
+		btnDelete,
+		rectSpacer,
 		btnRestore,
 	)
 
-	scrollBox := container.NewVScroll(
+	scrollBox = container.NewVScroll(
 		container.NewHBox(
 			layout.NewSpacer(),
-			container.NewMax(
+			container.NewStack(
 				rectScroll,
 				formSettings,
 			),
@@ -3220,28 +5244,16 @@ func layoutSettings() fyne.CanvasObject {
 		),
 	)
 
-	scrollBox.SetMinSize(fyne.NewSize(300, 450))
+	scrollBox.SetMinSize(fyne.NewSize(ui.MaxWidth, ui.Height*0.68))
 
 	gridItem1 := container.NewCenter(
 		container.NewVBox(
 			widget.NewLabel(""),
-			container.NewCenter(
-				res.rpc_header,
-				container.NewVBox(
-					title,
-					rectSpacer,
-				),
-			),
-			rectSpacer,
 			heading,
 			widget.NewLabel(""),
 			scrollBox,
 			rectSpacer,
 			rectSpacer,
-			btnCancel,
-			rectSpacer,
-			rectSpacer,
-			res.rpc_footer,
 		),
 	)
 
@@ -3251,237 +5263,23 @@ func layoutSettings() fyne.CanvasObject {
 		layout.NewSpacer(),
 	)
 
-	subContainer := container.NewMax()
-
-	c := container.NewBorder(
-		features,
-		subContainer,
-		nil,
-		nil,
-	)
-
-	layout := container.NewMax(
-		frame,
-		c,
-	)
-
-	return layout
-}
-
-func layoutNetrunner() fyne.CanvasObject {
-	resetResources()
-
-	wSpacer := widget.NewLabel(" ")
-	title := canvas.NewText("N E T R U N N E R", colors.Gray)
-	title.TextStyle = fyne.TextStyle{Bold: true}
-	title.TextSize = 16
-
-	nr.Label = canvas.NewText("", colors.Green)
-	nr.Label.TextSize = 28
-	nr.Label.Alignment = fyne.TextAlignCenter
-	nr.Label.TextStyle = fyne.TextStyle{Bold: true}
-
-	nr.LabelBlocks = canvas.NewText("", colors.Account)
-	nr.LabelBlocks.TextSize = 18
-	nr.LabelBlocks.Alignment = fyne.TextAlignCenter
-	nr.LabelBlocks.TextStyle = fyne.TextStyle{Bold: true}
-
-	heading := canvas.NewText(" Idle", colors.Gray)
-	heading.TextSize = 22
-	heading.Alignment = fyne.TextAlignCenter
-	heading.TextStyle = fyne.TextStyle{Bold: true}
-
-	rectStatus := canvas.NewRectangle(color.Transparent)
-	rectStatus.SetMinSize(fyne.NewSize(10, 10))
-	rect := canvas.NewRectangle(color.Transparent)
-	rect.SetMinSize(fyne.NewSize(MIN_WIDTH, 20))
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
-	rect.SetMinSize(fyne.NewSize(300, 30))
-	rectSpacer := canvas.NewRectangle(color.Transparent)
-	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
-	rect.SetMinSize(fyne.NewSize(10, 10))
-	rectList := canvas.NewRectangle(color.Transparent)
-	rectList.SetMinSize(fyne.NewSize(300, 35))
-	rectListBox := canvas.NewRectangle(color.Transparent)
-	rectListBox.SetMinSize(fyne.NewSize(300, 200))
-
-	res.nr_header.SetMinSize(fyne.NewSize(300, 80))
-	res.nr_footer.SetMinSize(fyne.NewSize(300, 20))
-
-	nr.Data = binding.BindStringList(&nr.BlockList)
-
-	nr.ScrollBox = widget.NewListWithData(nr.Data,
-		func() fyne.CanvasObject {
-			c := container.NewMax(
-				rectList,
-				container.NewHBox(
-					canvas.NewText("", colors.Account),
-					layout.NewSpacer(),
-					widget.NewButton("View", nil),
-				),
-			)
-			return c
-		},
-		func(di binding.DataItem, co fyne.CanvasObject) {
-			dat := di.(binding.String)
-			str, err := dat.Get()
-			if err != nil {
-				fmt.Printf("Error: %s\n", err)
-			}
-			dataItem := strings.Split(str, ",")
-			height := dataItem[0]
-			view := dataItem[1]
-			//co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*widget.Label).Bind(dataItem[0])
-			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*canvas.Text).Text = " " + height
-			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*canvas.Text).TextSize = 17
-			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*canvas.Text).TextStyle.Bold = true
-			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[2].(*widget.Button).OnTapped = func() {
-				if !engram.Disk.GetNetwork() {
-					openURL("https://testnetexplorer.dero.io/block/"+view, nil)
-				} else {
-					openURL("https://explorer.dero.io/block/"+view, nil)
-				}
-			}
-
-		})
-
-	nr.ScrollBox.OnSelected = func(id widget.ListItemID) {
-		nr.ScrollBox.UnselectAll()
-	}
-
-	icon := canvas.NewImageFromResource(resourceMinerOffPng)
-	icon.SetMinSize(fyne.NewSize(50, 50))
-	icon.FillMode = canvas.ImageFillOriginal
-
-	btnRunner := widget.NewButton("Start", nil)
-	btnRunner.OnTapped = func() {
-		if nr.Mission == 0 {
-			nr.Mission = 1
-			port := fmt.Sprintf("%d", DEFAULT_WORK_PORT)
-			if !engram.Disk.GetNetwork() {
-				port = fmt.Sprintf("%d", DEFAULT_TESTNET_WORK_PORT)
-			}
-			split := strings.Split(session.Daemon, ":")
-			daemon := split[0] + ":" + port
-			icon.Resource = resourceMinerOnPng
-			icon.Refresh()
-			btnRunner.SetText("Stop")
-			btnRunner.Refresh()
-			heading.Text = " Active"
-			heading.Color = colors.Green
-			heading.Refresh()
-			nr.Label.Text = "Starting Up..."
-			nr.Label.Refresh()
-			nr.LabelBlocks.Text = "Blocks:  0"
-			nr.LabelBlocks.Refresh()
-			go startRunner(engram.Disk, daemon, runtime.GOMAXPROCS(0)/2)
-		} else {
-			nr.Mission = 0
-			if nr.Connection != nil {
-				nr.Connection.UnderlyingConn().Close()
-				nr.Connection.Close()
-			}
-			fmt.Printf("[Netrunner] Shutdown initiated.\n")
-			icon.Resource = resourceMinerOffPng
-			icon.Refresh()
-			btnRunner.SetText("Start")
-			btnRunner.Refresh()
-			nr.Label.Text = "Job's done."
-			nr.Label.Refresh()
-			heading.Text = " Idle"
-			heading.Color = colors.Gray
-			heading.Refresh()
-		}
-	}
-
-	if nr.Mission == 1 {
-		icon.Resource = resourceMinerOnPng
-		nr.Label.Text = " " + nr.Hashrate
-		nr.LabelBlocks.Text = " Blocks: " + strconv.Itoa(int(nr.Blocks+nr.MiniBlocks))
-	} else {
-		icon.Resource = resourceMinerOffPng
-		nr.Label.Text = ""
-		nr.LabelBlocks.Text = ""
-	}
-
-	btnConfig := widget.NewButton("Configure", func() {
-
-	})
-
-	btnCancel := widget.NewButton("Hide", func() {
-		miner.Window.Hide()
-	})
-
-	netForm := container.NewVBox(
-		wSpacer,
-		container.NewCenter(res.nr_header, container.NewVBox(title, rectSpacer)),
-		rectSpacer,
+	footer := container.NewVBox(
 		container.NewHBox(
 			layout.NewSpacer(),
-			icon,
-			heading,
+			labelBack,
 			layout.NewSpacer(),
 		),
-		rectSpacer,
-		nr.Label,
-		rectSpacer,
-		nr.LabelBlocks,
-		wSpacer,
-		container.NewMax(
-			rectListBox,
-			nr.ScrollBox,
-		),
-		wSpacer,
-		btnRunner,
-		btnConfig,
-		btnCancel,
-		wSpacer,
-		res.nr_footer,
-	)
-
-	gridItem1 := container.NewCenter(
-		netForm,
-	)
-
-	gridItem2 := container.NewCenter()
-
-	gridItem3 := container.NewCenter()
-
-	gridItem4 := container.NewCenter()
-
-	gridItem1.Hidden = false
-	gridItem2.Hidden = true
-	gridItem3.Hidden = true
-	gridItem4.Hidden = true
-
-	features := container.NewCenter(
-		layout.NewSpacer(),
-		gridItem1,
-		layout.NewSpacer(),
-		gridItem2,
-		layout.NewSpacer(),
-		gridItem3,
-		layout.NewSpacer(),
-		gridItem4,
-		layout.NewSpacer(),
-	)
-
-	subContainer := container.NewMax(
-		container.NewVBox(
-			rectSpacer,
-			rectSpacer,
-		),
+		widget.NewLabel(" "),
 	)
 
 	c := container.NewBorder(
 		features,
-		subContainer,
+		footer,
 		nil,
 		nil,
 	)
 
-	layout := container.NewMax(
+	layout := container.NewStack(
 		frame,
 		c,
 	)
@@ -3491,7 +5289,12 @@ func layoutNetrunner() fyne.CanvasObject {
 
 func layoutMessages() fyne.CanvasObject {
 	resetResources()
-	wSpacer := widget.NewLabel(" ")
+	session.Domain = "app.messages"
+
+	if !walletapi.Connected {
+		session.Window.SetContent(layoutSettings())
+	}
+
 	title := canvas.NewText("M E S S A G E S", colors.Gray)
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.TextSize = 16
@@ -3501,55 +5304,84 @@ func layoutMessages() fyne.CanvasObject {
 	heading.Alignment = fyne.TextAlignCenter
 	heading.TextStyle = fyne.TextStyle{Bold: true}
 
-	rectSynapse := canvas.NewRectangle(color.Transparent)
-	rectSynapse.SetMinSize(fyne.NewSize(75, 75))
-	rectCenter := canvas.NewRectangle(colors.DarkMatter)
-	rectCenter.FillColor = colors.DarkMatter
-	rectCenter.SetMinSize(fyne.NewSize(10, 10))
-	rectUp := canvas.NewRectangle(colors.DarkMatter)
-	rectUp.SetMinSize(fyne.NewSize(10, 10))
-	rectDown := canvas.NewRectangle(colors.Green)
-	rectDown.SetMinSize(fyne.NewSize(10, 10))
-	rectLeft := canvas.NewRectangle(colors.DarkMatter)
-	rectLeft.SetMinSize(fyne.NewSize(10, 10))
-	rectRight := canvas.NewRectangle(colors.DarkMatter)
-	rectRight.SetMinSize(fyne.NewSize(10, 10))
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	checkLimit := widget.NewCheck(" Show only recent messages", nil)
+	checkLimit.OnChanged = func(b bool) {
+		if b {
+			if int(engram.Disk.Get_Height()) > 1000000 {
+				session.LimitMessages = uint64(int(engram.Disk.Get_Height()) - 1000000)
+				session.Window.SetContent(layoutTransition())
+				session.Window.SetContent(layoutMessages())
+				removeOverlays()
+			}
+		} else {
+			session.LimitMessages = 0
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutMessages())
+			removeOverlays()
+		}
+	}
+
+	if session.LimitMessages != uint64(0) {
+		checkLimit.Checked = true
+	}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Dashboard", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
+	}
+
 	rectStatus := canvas.NewRectangle(color.Transparent)
 	rectStatus.SetMinSize(fyne.NewSize(10, 10))
 	rectEmpty := canvas.NewRectangle(color.Transparent)
 	rectEmpty.SetMinSize(fyne.NewSize(10, 10))
 	rect := canvas.NewRectangle(color.Transparent)
-	rect.SetMinSize(fyne.NewSize(MIN_WIDTH, 20))
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
-	rect.SetMinSize(fyne.NewSize(300, 30))
+	rect.SetMinSize(fyne.NewSize(ui.Width, 20))
+	frame := &iframe{}
+	rect.SetMinSize(fyne.NewSize(ui.Width, 30))
 	rectSpacer := canvas.NewRectangle(color.Transparent)
 	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
 	rect.SetMinSize(fyne.NewSize(10, 10))
 	rectList := canvas.NewRectangle(color.Transparent)
-	rectList.SetMinSize(fyne.NewSize(300, 35))
+	rectList.SetMinSize(fyne.NewSize(ui.Width, 35))
 	rectListBox := canvas.NewRectangle(color.Transparent)
-	rectListBox.SetMinSize(fyne.NewSize(300, 257))
-	rectMessage := canvas.NewRectangle(color.Transparent)
-	rectMessage.SetMinSize(fyne.NewSize(60, 10))
-
-	res.rpc_header.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_footer.SetMinSize(fyne.NewSize(300, 20))
+	rectListBox.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.40))
 
 	messages.Data = nil
 
-	data := getMessages(0)
+	data := getMessages(engram.Disk.Get_Height() - session.LimitMessages)
+	temp := data
 
 	list := binding.BindStringList(&data)
 
 	messages.Box = widget.NewListWithData(list,
 		func() fyne.CanvasObject {
-			c := container.NewMax(
-				rectList,
-				container.NewHBox(
-					widget.NewLabel(""),
-					layout.NewSpacer(),
-				),
+			c := container.NewVBox(
+				widget.NewLabel(""),
 			)
 			return c
 		},
@@ -3559,25 +5391,24 @@ func layoutMessages() fyne.CanvasObject {
 			if err != nil {
 				return
 			}
-			dataItem := strings.Split(str, ":")
+			dataItem := strings.Split(str, "~~~")
 			short := dataItem[0]
 			address := short[len(short)-10:]
 			username := dataItem[1]
 
 			if username == "" {
-				co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*widget.Label).SetText("..." + address)
+				co.(*fyne.Container).Objects[0].(*widget.Label).SetText("..." + address)
 			} else {
-				co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*widget.Label).SetText(username)
+				co.(*fyne.Container).Objects[0].(*widget.Label).SetText(username)
 			}
-			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*widget.Label).Wrapping = fyne.TextWrapWord
-			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*widget.Label).TextStyle.Bold = false
-			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*widget.Label).Alignment = fyne.TextAlignLeading
-
+			co.(*fyne.Container).Objects[0].(*widget.Label).Wrapping = fyne.TextWrapWord
+			co.(*fyne.Container).Objects[0].(*widget.Label).TextStyle.Bold = false
+			co.(*fyne.Container).Objects[0].(*widget.Label).Alignment = fyne.TextAlignLeading
 		})
 
 	messages.Box.OnSelected = func(id widget.ListItemID) {
 		messages.Box.UnselectAll()
-		split := strings.Split(data[id], ":")
+		split := strings.Split(data[id], "~~~")
 		if split[1] == "" {
 			messages.Contact = split[0]
 		} else {
@@ -3586,6 +5417,38 @@ func layoutMessages() fyne.CanvasObject {
 
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutPM())
+		removeOverlays()
+	}
+
+	searchList := []string{}
+
+	entrySearch := widget.NewEntry()
+	entrySearch.PlaceHolder = "Search for a Contact"
+	entrySearch.OnChanged = func(s string) {
+		s = strings.ToLower(s)
+		searchList = []string{}
+		if s == "" {
+			data = temp
+			list.Reload()
+		} else {
+			for _, d := range temp {
+				tempd := strings.ToLower(d)
+				split := strings.Split(tempd, "~~~")
+
+				if split[1] == "" {
+					if strings.Contains(split[0], s) {
+						searchList = append(searchList, d)
+					}
+				} else {
+					if strings.Contains(split[1], s) {
+						searchList = append(searchList, d)
+					}
+				}
+			}
+
+			data = searchList
+			list.Reload()
+		}
 	}
 
 	btnSend := widget.NewButton("New Message", func() {
@@ -3599,10 +5462,13 @@ func layoutMessages() fyne.CanvasObject {
 
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutPM())
+		removeOverlays()
 	})
 	btnSend.Disable()
 
 	entryDest := widget.NewEntry()
+	entryDest.MultiLine = false
+	entryDest.Wrapping = fyne.TextWrap(fyne.TextTruncateClip)
 	entryDest.PlaceHolder = "Username or Address"
 	entryDest.Validator = func(s string) error {
 		if len(s) > 0 {
@@ -3633,40 +5499,48 @@ func layoutMessages() fyne.CanvasObject {
 	}
 
 	/*
-		entryMessage := widget.NewEntry()
-		entryMessage.PlaceHolder = "Message"
-		entryMessage.OnChanged = func(s string) {
-			messages.Message = s
-			if messages.Contact == "" || messages.Message == "" {
-				btnSend.Disable()
-			} else {
-				btnSend.Enable()
+		entryDest.OnFocusGained = func() {
+			if fyne.CurrentDevice().IsMobile() {
+				rectListBox.SetMinSize(fyne.NewSize(ui.Width, 170))
+				rectListBox.Resize(fyne.NewSize(ui.Width, 170))
+				rectListBox.Refresh()
+				session.Window.Canvas().Content().Refresh()
+			}
+		}
+
+		entryDest.OnFocusLost = func() {
+			if fyne.CurrentDevice().IsMobile() {
+				rectListBox.SetMinSize(fyne.NewSize(ui.Width, 270))
+				rectListBox.Resize(fyne.NewSize(ui.Width, 270))
+				rectListBox.Refresh()
+				session.Window.Canvas().Content().Refresh()
 			}
 		}
 	*/
 
 	messageForm := container.NewVBox(
-		wSpacer,
-		container.NewCenter(res.rpc_header, container.NewVBox(title, rectSpacer)),
+		rectSpacer,
 		rectSpacer,
 		container.NewHBox(
 			layout.NewSpacer(),
 			heading,
 			layout.NewSpacer(),
 		),
-		wSpacer,
-		container.NewMax(
+		rectSpacer,
+		rectSpacer,
+		entrySearch,
+		rectSpacer,
+		rectSpacer,
+		container.NewStack(
 			rectListBox,
 			messages.Box,
 		),
 		rectSpacer,
-		widget.NewSeparator(),
-		rectSpacer,
 		entryDest,
 		rectSpacer,
 		btnSend,
-		wSpacer,
-		res.rpc_footer,
+		rectSpacer,
+		checkLimit,
 	)
 
 	gridItem1 := container.NewCenter(
@@ -3697,7 +5571,7 @@ func layoutMessages() fyne.CanvasObject {
 	)
 
 	session.Window.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
-		if session.Domain != "app.wallet" {
+		if session.Domain != "app.messages" {
 			return
 		}
 
@@ -3706,51 +5580,36 @@ func layoutMessages() fyne.CanvasObject {
 
 			session.Window.SetContent(layoutTransition())
 			session.Window.SetContent(layoutDashboard())
+			removeOverlays()
 		} else if k.Name == fyne.KeyF5 {
 			session.Window.SetContent(layoutMessages())
+			removeOverlays()
 		}
 	})
 
-	synapse := container.NewMax(
-		rectSynapse,
-		container.NewGridWithColumns(3,
-			rectEmpty,
-			rectUp,
-			rectEmpty,
-			rectLeft,
-			rectCenter,
-			rectRight,
-			rectEmpty,
-			rectDown,
-			rectEmpty,
-		),
-	)
-
-	subContainer := container.NewMax(
+	subContainer := container.NewStack(
 		container.NewVBox(
-			container.NewCenter(
-				rectSynapse,
-				synapse,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
 			),
 			rectSpacer,
-			container.NewHBox(
+			rectSpacer,
+			container.NewCenter(
 				layout.NewSpacer(),
-				container.NewMax(
-					rectStatus,
-					status.Connection,
-				),
-				widget.NewLabel(""),
-				container.NewMax(
-					rectStatus,
-					status.Sync,
-				),
-				widget.NewLabel(""),
-				container.NewMax(
-					rectStatus,
-					status.Cyberdeck,
-				),
+				linkBack,
 				layout.NewSpacer(),
 			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
 			rectSpacer,
 		),
 	)
@@ -3762,7 +5621,7 @@ func layoutMessages() fyne.CanvasObject {
 		nil,
 	)
 
-	layout := container.NewMax(
+	layout := container.NewStack(
 		frame,
 		c,
 	)
@@ -3772,18 +5631,28 @@ func layoutMessages() fyne.CanvasObject {
 
 func layoutPM() fyne.CanvasObject {
 	resetResources()
+	session.Domain = "app.messages.contact"
+
+	if !walletapi.Connected {
+		session.Window.SetContent(layoutSettings())
+	}
+
+	getPrimaryUsername()
 
 	contactAddress := ""
 
 	_, err := globals.ParseValidateAddress(messages.Contact)
 	if err != nil {
-		contactAddress = messages.Contact
+		_, err := engram.Disk.NameToAddress(messages.Contact)
+		if err == nil {
+			contactAddress = messages.Contact
+		}
 	} else {
 		short := messages.Contact[len(messages.Contact)-10:]
 		contactAddress = "..." + short
 	}
 
-	wSpacer := widget.NewLabel(" ")
+	//wSpacer := widget.NewLabel(" ")
 	title := canvas.NewText("M E S S A G E S", colors.Gray)
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.TextSize = 16
@@ -3798,57 +5667,75 @@ func layoutPM() fyne.CanvasObject {
 	lastActive.Alignment = fyne.TextAlignCenter
 	lastActive.TextStyle = fyne.TextStyle{Bold: false}
 
-	rectSynapse := canvas.NewRectangle(color.Transparent)
-	rectSynapse.SetMinSize(fyne.NewSize(75, 75))
-	rectCenter := canvas.NewRectangle(colors.DarkMatter)
-	rectCenter.FillColor = colors.DarkMatter
-	rectCenter.SetMinSize(fyne.NewSize(10, 10))
-	rectUp := canvas.NewRectangle(colors.DarkMatter)
-	rectUp.SetMinSize(fyne.NewSize(10, 10))
-	rectDown := canvas.NewRectangle(colors.Blue)
-	rectDown.SetMinSize(fyne.NewSize(10, 10))
-	rectLeft := canvas.NewRectangle(colors.DarkMatter)
-	rectLeft.SetMinSize(fyne.NewSize(10, 10))
-	rectRight := canvas.NewRectangle(colors.DarkMatter)
-	rectRight.SetMinSize(fyne.NewSize(10, 10))
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Messages", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutMessages())
+		removeOverlays()
+	}
+
 	rectStatus := canvas.NewRectangle(color.Transparent)
 	rectStatus.SetMinSize(fyne.NewSize(10, 10))
 	rectEmpty := canvas.NewRectangle(color.Transparent)
 	rectEmpty.SetMinSize(fyne.NewSize(10, 10))
 	rect := canvas.NewRectangle(color.Transparent)
-	rect.SetMinSize(fyne.NewSize(MIN_WIDTH, 20))
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
-	rect.SetMinSize(fyne.NewSize(300, 30))
+	rect.SetMinSize(fyne.NewSize(ui.Width*0.7, 30))
+	frame := &iframe{}
+	subframe := canvas.NewRectangle(color.Transparent)
+	subframe.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.50))
 	rectSpacer := canvas.NewRectangle(color.Transparent)
 	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
 	rect.SetMinSize(fyne.NewSize(10, 10))
 	rectList := canvas.NewRectangle(color.Transparent)
-	rectList.SetMinSize(fyne.NewSize(300, 35))
+	rectList.SetMinSize(fyne.NewSize(ui.Width, 35))
 	rectListBox := canvas.NewRectangle(color.Transparent)
-	rectListBox.SetMinSize(fyne.NewSize(300, 250))
-	rectMessage := canvas.NewRectangle(color.Transparent)
-	rectMessage.SetMinSize(fyne.NewSize(60, 10))
-
-	res.rpc_header.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_footer.SetMinSize(fyne.NewSize(300, 20))
+	rectListBox.SetMinSize(fyne.NewSize(ui.Width*0.42, 30))
+	rectOutbound := canvas.NewRectangle(color.Transparent)
+	rectOutbound.SetMinSize(fyne.NewSize(ui.Width*0.166, 30))
 
 	messages.Data = nil
 
 	chats := container.NewVBox()
 
-	chatFrame := container.NewCenter(
-		container.NewMax(
-			rectListBox,
+	chatFrame := container.NewStack(
+		rectListBox,
+		container.NewStack(
 			chats,
 		),
 	)
 
 	chatbox := container.NewVScroll(
-		container.NewMax(chatFrame),
+		container.NewStack(
+			chatFrame,
+		),
 	)
 
-	data := getMessagesFromUser(messages.Contact, 0)
+	var e *fyne.Container
+
+	data := getMessagesFromUser(messages.Contact, engram.Disk.Get_Height()-session.LimitMessages)
 	for d := range data {
 		if data[d].Incoming {
 			if data[d].Payload_RPC.Has(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString) {
@@ -3856,28 +5743,73 @@ func layoutPM() fyne.CanvasObject {
 
 				} else {
 					t := data[d].Time
-					time := t.Format("2006-01-02 15:04:05")
+					time := string(t.Format(time.RFC822))
 					comment := data[d].Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string)
-					messages.Data = append(messages.Data, data[d].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string)+";;"+comment+";;"+time)
+					links := getTextURL(comment)
+
+					for i := range links {
+						if comment == links[i] {
+							if len(links[i]) > 25 {
+								comment = `[ ` + links[i][0:25] + "..." + ` ](` + links[i] + `)`
+							} else {
+								comment = `[ ` + links[i] + ` ](` + links[i] + `)`
+							}
+						} else {
+							linkText := ""
+							split := strings.Split(comment, links[i])
+							if len(links[i]) > 25 {
+								linkText = links[i][0:25] + "..."
+							} else {
+								linkText = links[i]
+							}
+							comment = `` + split[0] + `[link]` + split[1] + "\n\n›" + `[ ` + linkText + ` ](` + links[i] + `)`
+						}
+					}
+					messages.Data = append(messages.Data, data[d].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string)+";;;;"+comment+";;;;"+time)
 				}
 			}
 		} else {
 			t := data[d].Time
-			time := t.Format("2006-01-02 15:04:05")
+			time := string(t.Format(time.RFC822))
 			comment := data[d].Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string)
-			messages.Data = append(messages.Data, engram.Disk.GetAddress().String()+";;"+comment+";;"+time)
+			links := getTextURL(comment)
+
+			for i := range links {
+				if comment == links[i] {
+					if len(links[i]) > 25 {
+						comment = `[ ` + links[i][0:25] + "..." + ` ](` + links[i] + `)`
+					} else {
+						comment = `[ ` + links[i] + ` ](` + links[i] + `)`
+					}
+				} else {
+					linkText := ""
+					split := strings.Split(comment, links[i])
+					if len(links[i]) > 25 {
+						linkText = links[i][0:25] + "..."
+					} else {
+						linkText = links[i]
+					}
+					comment = `` + split[0] + `[link]` + split[1] + "\n\n›" + `[ ` + linkText + ` ](` + links[i] + `)`
+				}
+			}
+			messages.Data = append(messages.Data, engram.Disk.GetAddress().String()+";;;;"+comment+";;;;"+time)
 		}
 	}
 
 	if len(data) > 0 {
 		for m := range messages.Data {
 			var sender string
-			split := strings.Split(messages.Data[m], ";;")
-			align := fyne.TextAlignLeading
-			mdata := widget.NewLabel("")
-			mdata.Alignment = align
+			split := strings.Split(messages.Data[m], ";;;;")
+			mdata := widget.NewRichTextFromMarkdown("")
 			mdata.Wrapping = fyne.TextWrapWord
+			datetime := canvas.NewText("", colors.Green)
+			datetime.TextSize = 11
 			boxColor := colors.Flint
+			rect := canvas.NewRectangle(boxColor)
+			rect.SetMinSize(fyne.NewSize(ui.Width*0.80, 30))
+			rect.CornerRadius = 5.0
+			rect5 := canvas.NewRectangle(color.Transparent)
+			rect5.SetMinSize(fyne.NewSize(5, 5))
 
 			uname, err := engram.Disk.NameToAddress(split[0])
 			if err != nil {
@@ -3887,29 +5819,55 @@ func layoutPM() fyne.CanvasObject {
 			}
 
 			if sender == engram.Disk.GetAddress().String() {
-				boxColor = colors.Flint
-				align = fyne.TextAlignTrailing
-				mdata.SetText("› " + split[1])
+				rect.FillColor = colors.DarkGreen
+				mdata.ParseMarkdown(split[1])
+				datetime.Text = split[2]
+				e = container.NewBorder(
+					nil,
+					container.NewVBox(
+						container.NewHBox(
+							layout.NewSpacer(),
+							datetime,
+							rect5,
+						),
+						rect5,
+					),
+					rectOutbound,
+					container.NewStack(
+						rect,
+						container.NewVBox(
+							mdata,
+						),
+					),
+				)
 			} else {
-				boxColor = colors.DarkMatter
-				align = fyne.TextAlignLeading
-				mdata.SetText(split[1])
+				rect.FillColor = colors.Flint
+				mdata.ParseMarkdown(split[1])
+				datetime.Text = split[2]
+				e = container.NewBorder(
+					nil,
+					container.NewVBox(
+						container.NewHBox(
+							rect5,
+							datetime,
+							layout.NewSpacer(),
+						),
+						rect5,
+					),
+					container.NewStack(
+						rect,
+						container.NewVBox(
+							mdata,
+						),
+					),
+					rectOutbound,
+				)
 			}
 
-			rect := canvas.NewRectangle(boxColor)
-			rect.SetMinSize(mdata.MinSize())
-
-			var entry *fyne.Container
-
-			entry = container.NewMax(
-				rect,
-				mdata,
-			)
-
-			lastActive.Text = "LATEST:  " + split[2] + ""
+			lastActive.Text = "Last Updated:  " + time.Now().Format(time.RFC822)
 			lastActive.Refresh()
 
-			chats.Add(entry)
+			chats.Add(e)
 			chats.Refresh()
 			chatbox.Refresh()
 			chatbox.ScrollToBottom()
@@ -3920,15 +5878,65 @@ func layoutPM() fyne.CanvasObject {
 	btnSend.Disable()
 
 	entry := widget.NewEntry()
+	entry.MultiLine = false
+	entry.Wrapping = fyne.TextWrap(fyne.TextTruncateClip)
 	entry.PlaceHolder = "Message"
 	entry.OnChanged = func(s string) {
 		messages.Message = s
-		if messages.Message == "" {
+		contact := messages.Contact
+		check, err := engram.Disk.NameToAddress(messages.Contact)
+		if err == nil {
+			contact = check
+		}
+
+		_, err = globals.ParseValidateAddress(contact)
+		if err != nil {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutMessages())
+			removeOverlays()
+			return
+		}
+
+		err = checkMessagePack(messages.Message, session.Username, contact)
+		if err != nil {
+			btnSend.Text = "Message too long..."
 			btnSend.Disable()
+			btnSend.Refresh()
+			return
 		} else {
-			btnSend.Enable()
+			if messages.Message == "" {
+				btnSend.Text = "Send"
+				btnSend.Disable()
+				btnSend.Refresh()
+			} else {
+				btnSend.Text = "Send"
+				btnSend.Enable()
+				btnSend.Refresh()
+			}
 		}
 	}
+
+	/*
+		entry.OnFocusGained = func() {
+			if fyne.CurrentDevice().IsMobile() {
+				subframe.SetMinSize(fyne.NewSize(ui.Width, 165))
+				subframe.Resize(fyne.NewSize(ui.Width, 165))
+				subframe.Refresh()
+				session.Window.Canvas().Content().Refresh()
+			}
+			entry.CursorRow = 0
+			entry.CursorColumn = 0
+		}
+
+		entry.OnFocusLost = func() {
+			if fyne.CurrentDevice().IsMobile() {
+				subframe.SetMinSize(fyne.NewSize(ui.Width, 270))
+				subframe.Resize(fyne.NewSize(ui.Width, 270))
+				subframe.Refresh()
+				session.Window.Canvas().Content().Refresh()
+			}
+		}
+	*/
 
 	btnSend.OnTapped = func() {
 		if messages.Message == "" {
@@ -3939,6 +5947,10 @@ func layoutPM() fyne.CanvasObject {
 		if err != nil {
 			check, err := engram.Disk.NameToAddress(messages.Contact)
 			if err != nil {
+				fmt.Printf("[Message] Failed to send: %s\n", err)
+				btnSend.Text = "Failed to verify address..."
+				btnSend.Disable()
+				btnSend.Refresh()
 				return
 			}
 			contact = check
@@ -3946,21 +5958,40 @@ func layoutPM() fyne.CanvasObject {
 			contact = messages.Contact
 		}
 
-		err = sendMessage(messages.Message, session.Username, contact)
+		txid, err := sendMessage(messages.Message, session.Username, contact)
 		if err != nil {
 			fmt.Printf("[Message] Failed to send: %s\n", err)
+			btnSend.Text = "Failed to send message..."
+			btnSend.Disable()
+			btnSend.Refresh()
 			return
 		}
 
+		fmt.Printf("[Message] Sent message successfully to: %s\n", messages.Contact)
+		btnSend.Text = "Confirming..."
+		btnSend.Disable()
+		btnSend.Refresh()
 		messages.Message = ""
 		entry.Text = ""
 		entry.Refresh()
-		btnSend.Disable()
+
+		walletapi.WaitNewHeightBlock()
+		for {
+			result := engram.Disk.Get_Payments_TXID(txid.String())
+
+			if result.TXID != txid.String() {
+				time.Sleep(time.Second * 1)
+			} else {
+				break
+			}
+		}
+
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutPM())
 	}
 
 	messageForm := container.NewVBox(
-		wSpacer,
-		container.NewCenter(res.rpc_header, container.NewVBox(title, rectSpacer)),
+		rectSpacer,
 		rectSpacer,
 		container.NewHBox(
 			layout.NewSpacer(),
@@ -3971,18 +6002,17 @@ func layoutPM() fyne.CanvasObject {
 		lastActive,
 		rectSpacer,
 		rectSpacer,
-		container.NewMax(
-			rectListBox,
+		container.NewStack(
+			subframe,
 			chatbox,
 		),
 		rectSpacer,
-		widget.NewSeparator(),
 		rectSpacer,
 		entry,
 		rectSpacer,
 		btnSend,
-		wSpacer,
-		res.rpc_footer,
+		rectSpacer,
+		rectSpacer,
 	)
 
 	gridItem1 := container.NewCenter(
@@ -4013,65 +6043,50 @@ func layoutPM() fyne.CanvasObject {
 	)
 
 	session.Window.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
-		if session.Domain != "app.wallet" {
+		if session.Domain != "app.messages.contact" {
 			return
 		}
 
 		if k.Name == fyne.KeyUp {
-			session.Dashboard = "messages"
+			session.Dashboard = "app.messages"
 			messages.Contact = ""
 			session.Window.SetContent(layoutTransition())
 			session.Window.SetContent(layoutMessages())
+			removeOverlays()
 		} else if k.Name == fyne.KeyEscape {
-			session.Dashboard = "messages"
+			session.Dashboard = "app.messages"
 			messages.Contact = ""
 			session.Window.SetContent(layoutTransition())
 			session.Window.SetContent(layoutMessages())
+			removeOverlays()
 		} else if k.Name == fyne.KeyF5 {
 			session.Window.SetContent(layoutPM())
 		}
 	})
 
-	synapse := container.NewMax(
-		rectSynapse,
-		container.NewGridWithColumns(3,
-			rectEmpty,
-			rectUp,
-			rectEmpty,
-			rectLeft,
-			rectCenter,
-			rectRight,
-			rectEmpty,
-			rectDown,
-			rectEmpty,
-		),
-	)
-
-	subContainer := container.NewMax(
+	subContainer := container.NewStack(
 		container.NewVBox(
-			container.NewCenter(
-				rectSynapse,
-				synapse,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
 			),
 			rectSpacer,
-			container.NewHBox(
+			rectSpacer,
+			container.NewCenter(
 				layout.NewSpacer(),
-				container.NewMax(
-					rectStatus,
-					status.Connection,
-				),
-				widget.NewLabel(""),
-				container.NewMax(
-					rectStatus,
-					status.Sync,
-				),
-				widget.NewLabel(""),
-				container.NewMax(
-					rectStatus,
-					status.Cyberdeck,
-				),
+				linkBack,
 				layout.NewSpacer(),
 			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
 			rectSpacer,
 		),
 	)
@@ -4083,7 +6098,7 @@ func layoutPM() fyne.CanvasObject {
 		nil,
 	)
 
-	layout := container.NewMax(
+	layout := container.NewStack(
 		frame,
 		c,
 	)
@@ -4091,49 +6106,466 @@ func layoutPM() fyne.CanvasObject {
 	return layout
 }
 
-func layoutWaiting(title *canvas.Text, heading *canvas.Text, sub *canvas.Text, btn *widget.Button) fyne.CanvasObject {
+func layoutCyberdeck() fyne.CanvasObject {
 	resetResources()
+	session.Domain = "app.cyberdeck"
+	wSpacer := widget.NewLabel(" ")
+	title := canvas.NewText("C Y B E R D E C K", colors.Gray)
+	title.TextStyle = fyne.TextStyle{Bold: true}
+	title.TextSize = 16
+
+	heading := canvas.NewText("My Contacts", colors.Green)
+	heading.TextSize = 22
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
 
 	rect := canvas.NewRectangle(color.Transparent)
-	rect.SetMinSize(fyne.NewSize(200, 233))
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
+	rect.SetMinSize(fyne.NewSize(ui.Width, 20))
+	frame := &iframe{}
 	rectSpacer := canvas.NewRectangle(color.Transparent)
 	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
 
-	res.gram.SetMinSize(fyne.NewSize(300, 185))
-	res.gram_footer.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_header.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.home_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.nft_footer.SetMinSize(fyne.NewSize(300, 20))
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	session.Gif, _ = newGif(resourceAnimation2Gif)
-	session.Gif.SetMinSize(rect.MinSize())
-	session.Gif.Start()
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
 
-	waitForm := container.NewVBox(
-		widget.NewLabel(""),
-		container.NewCenter(res.rpc_header, container.NewVBox(title, rectSpacer)),
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Dashboard", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
+	}
+
+	shardText := canvas.NewText(session.Username, colors.Green)
+	shardText.TextStyle = fyne.TextStyle{Bold: true}
+	shardText.TextSize = 22
+
+	shortShard := canvas.NewText("APPLICATION  CONNECTIONS", colors.Gray)
+	shortShard.TextStyle = fyne.TextStyle{Bold: true}
+	shortShard.TextSize = 12
+
+	linkColor := colors.Green
+
+	if cyberdeck.server == nil {
+		session.Link = "Blocked"
+		linkColor = colors.Gray
+	}
+
+	cyberdeck.status = canvas.NewText(session.Link, linkColor)
+	cyberdeck.status.TextSize = 22
+	cyberdeck.status.TextStyle = fyne.TextStyle{Bold: true}
+
+	serverStatus := canvas.NewText("APPLICATION  CONNECTIONS", colors.Gray)
+	serverStatus.TextSize = 12
+	serverStatus.Alignment = fyne.TextAlignCenter
+	serverStatus.TextStyle = fyne.TextStyle{Bold: true}
+
+	linkCenter := container.NewCenter(
+		cyberdeck.status,
+	)
+
+	cyberdeck.userText = widget.NewEntry()
+	cyberdeck.userText.PlaceHolder = "Username"
+	cyberdeck.userText.OnChanged = func(s string) {
+		if len(s) > 1 {
+			cyberdeck.user = s
+		}
+	}
+
+	cyberdeck.passText = widget.NewEntry()
+	cyberdeck.passText.Password = true
+	cyberdeck.passText.PlaceHolder = "Password"
+	cyberdeck.passText.OnChanged = func(s string) {
+		if len(s) > 1 {
+			cyberdeck.pass = s
+		}
+	}
+
+	cyberdeck.toggle = widget.NewButton("Turn On", nil)
+	cyberdeck.toggle.OnTapped = func() {
+		toggleCyberdeck()
+	}
+
+	if session.Offline {
+		cyberdeck.toggle.Text = "Disabled in Offline Mode"
+		cyberdeck.toggle.Disable()
+	} else {
+		if cyberdeck.server != nil {
+			cyberdeck.status.Text = "Allowed"
+			cyberdeck.status.Color = colors.Green
+			cyberdeck.toggle.Text = "Turn Off"
+			cyberdeck.userText.Disable()
+			cyberdeck.passText.Disable()
+		} else {
+			cyberdeck.status.Text = "Blocked"
+			cyberdeck.status.Color = colors.Gray
+			cyberdeck.toggle.Text = "Turn On"
+			cyberdeck.userText.Enable()
+			cyberdeck.passText.Enable()
+		}
+	}
+
+	cyberdeck.userText.SetText(cyberdeck.user)
+	cyberdeck.passText.SetText(cyberdeck.pass)
+
+	linkCopy := widget.NewHyperlinkWithStyle("Copy Credentials", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkCopy.OnTapped = func() {
+		session.Window.Clipboard().SetContent(cyberdeck.user + ":" + cyberdeck.pass)
+	}
+
+	deckForm := container.NewVBox(
+		rect,
 		rectSpacer,
-		heading,
+		container.NewCenter(container.NewVBox(title, rectSpacer)),
 		rectSpacer,
-		sub,
-		widget.NewLabel(""),
-		container.NewMax(
-			session.Gif,
+		linkCenter,
+		rectSpacer,
+		serverStatus,
+		wSpacer,
+		cyberdeck.toggle,
+		wSpacer,
+		cyberdeck.userText,
+		rectSpacer,
+		cyberdeck.passText,
+		wSpacer,
+		container.NewHBox(
+			layout.NewSpacer(),
+			linkCopy,
+			layout.NewSpacer(),
 		),
-		widget.NewLabel(""),
-		widget.NewLabel(""),
-		widget.NewLabel(""),
-		widget.NewLabel(""),
-		btn,
-		widget.NewLabel(""),
-		res.rpc_footer,
+		wSpacer,
 	)
 
 	gridItem1 := container.NewCenter(
-		waitForm,
+		deckForm,
+	)
+
+	gridItem1.Hidden = false
+
+	features := container.NewCenter(
+		layout.NewSpacer(),
+		gridItem1,
+		layout.NewSpacer(),
+	)
+
+	session.Window.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
+		if k.Name == fyne.KeyLeft {
+			session.Dashboard = "main"
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutDashboard())
+			removeOverlays()
+		}
+	})
+
+	subContainer := container.NewStack(
+		container.NewVBox(
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	c := container.NewBorder(
+		features,
+		subContainer,
+		nil,
+		nil,
+	)
+
+	layout := container.NewStack(
+		frame,
+		c,
+	)
+
+	return layout
+}
+
+func layoutIdentity() fyne.CanvasObject {
+	resetResources()
+	session.Domain = "app.Identity"
+	title := canvas.NewText("I D E N T I T Y", colors.Gray)
+	title.TextStyle = fyne.TextStyle{Bold: true}
+	title.TextSize = 16
+
+	heading := canvas.NewText("My Contacts", colors.Green)
+	heading.TextSize = 22
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	frame := &iframe{}
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
+	rectList := canvas.NewRectangle(color.Transparent)
+	rectList.SetMinSize(fyne.NewSize(ui.Width, 35))
+	rectListBox := canvas.NewRectangle(color.Transparent)
+	rectListBox.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.44))
+
+	shortShard := canvas.NewText("PRIMARY  USERNAME", colors.Gray)
+	shortShard.TextStyle = fyne.TextStyle{Bold: true}
+	shortShard.TextSize = 12
+
+	idCenter := container.NewCenter(
+		shortShard,
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Dashboard", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
+	}
+
+	//entryReg := NewMobileEntry()
+	entryReg := widget.NewEntry()
+	entryReg.MultiLine = false
+	entryReg.Wrapping = fyne.TextWrap(fyne.TextTruncateClip)
+
+	userData, err := queryUsernames()
+	if err != nil {
+		userData, err = getUsernames()
+		if err != nil {
+			userData = nil
+		}
+	}
+
+	userList := binding.BindStringList(&userData)
+
+	btnReg := widget.NewButton(" Register ", nil)
+	btnReg.Disable()
+	btnReg.OnTapped = func() {
+		if len(session.NewUser) > 5 {
+			valid, _, _ := checkUsername(session.NewUser, -1)
+			if !valid {
+				btnReg.Text = "Confirming..."
+				btnReg.Disable()
+				btnReg.Refresh()
+				err := registerUsername(session.NewUser)
+				if err != nil {
+					btnReg.Text = "Unable to register..."
+					btnReg.Refresh()
+					fmt.Printf("[Username] %s\n", err)
+
+				} else {
+					go func() {
+						entryReg.Text = ""
+						entryReg.Refresh()
+						walletapi.WaitNewHeightBlock()
+						var loop bool
+						for !loop {
+							if session.Domain == "app.Identity" {
+								//vars, _, _, err := gnomon.Index.RPC.GetSCVariables("0000000000000000000000000000000000000000000000000000000000000001", engram.Disk.Get_Daemon_TopoHeight(), nil, []string{session.NewUser}, nil, false)
+								usernames, err := queryUsernames()
+								if err != nil {
+									fmt.Printf("[Username] Error querying usernames: %s\n", err)
+									return
+								}
+
+								for u := range usernames {
+									if usernames[u] == session.NewUser {
+										fmt.Printf("[Username] Successfully registered username: %s\n", session.NewUser)
+										_ = tx
+										btnReg.Text = "Registration successful!"
+										btnReg.Refresh()
+										session.NewUser = ""
+										loop = true
+										session.Window.SetContent(layoutIdentity())
+										break
+									}
+								}
+							} else {
+								loop = true
+							}
+
+							time.Sleep(time.Second * 1)
+						}
+					}()
+				}
+			}
+		}
+	}
+
+	entryReg.PlaceHolder = "New Username"
+	entryReg.Validator = func(s string) error {
+		btnReg.Text = " Register "
+		btnReg.Enable()
+		btnReg.Refresh()
+		session.NewUser = s
+		if len(s) > 5 {
+			valid, _, _ := checkUsername(s, -1)
+			if !valid {
+				btnReg.Enable()
+				btnReg.Refresh()
+			} else {
+				btnReg.Disable()
+				err := errors.New("Username already exists")
+				entryReg.SetValidationError(err)
+				btnReg.Refresh()
+				return err
+			}
+		} else {
+			btnReg.Disable()
+			err := errors.New("Username too short, need a minimum of six characters")
+			entryReg.SetValidationError(err)
+			btnReg.Refresh()
+			return err
+		}
+
+		return nil
+	}
+	entryReg.OnChanged = func(s string) {
+		entryReg.Validate()
+	}
+
+	userBox := widget.NewListWithData(userList,
+		func() fyne.CanvasObject {
+			c := container.NewVBox(
+				widget.NewLabel(""),
+			)
+			return c
+		},
+		func(di binding.DataItem, co fyne.CanvasObject) {
+			dat := di.(binding.String)
+			str, err := dat.Get()
+			if err != nil {
+				return
+			}
+
+			co.(*fyne.Container).Objects[0].(*widget.Label).SetText(str)
+			co.(*fyne.Container).Objects[0].(*widget.Label).Wrapping = fyne.TextWrapWord
+			co.(*fyne.Container).Objects[0].(*widget.Label).TextStyle.Bold = false
+			co.(*fyne.Container).Objects[0].(*widget.Label).Alignment = fyne.TextAlignLeading
+		})
+
+	err = getPrimaryUsername()
+	if err != nil {
+		session.Username = ""
+	}
+
+	textUsername := canvas.NewText(session.Username, colors.Green)
+	textUsername.TextStyle = fyne.TextStyle{Bold: true}
+	textUsername.TextSize = 22
+
+	if session.Username == "" {
+		textUsername.Text = "---"
+		textUsername.Refresh()
+	} else {
+		for u := range userData {
+			if userData[u] == session.Username {
+				userBox.Select(u)
+				userBox.ScrollTo(u)
+			}
+		}
+	}
+
+	userBox.OnSelected = func(id widget.ListItemID) {
+		overlay := session.Window.Canvas().Overlays()
+		overlay.Add(
+			container.NewStack(
+				&iframe{},
+				canvas.NewRectangle(colors.DarkMatter),
+			),
+		)
+		overlay.Add(layoutIdentityDetail(userData[id]))
+		userBox.UnselectAll()
+	}
+
+	shardForm := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			container.NewVBox(
+				title,
+				rectSpacer,
+			),
+		),
+		rectSpacer,
+		container.NewStack(
+			container.NewCenter(
+				textUsername,
+			),
+		),
+		rectSpacer,
+		idCenter,
+		rectSpacer,
+		rectSpacer,
+		container.NewStack(
+			rectListBox,
+			userBox,
+		),
+		rectSpacer,
+		entryReg,
+		rectSpacer,
+		btnReg,
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+	)
+
+	gridItem1 := container.NewCenter(
+		shardForm,
 	)
 
 	features := container.NewCenter(
@@ -4142,7 +6574,46 @@ func layoutWaiting(title *canvas.Text, heading *canvas.Text, sub *canvas.Text, b
 		layout.NewSpacer(),
 	)
 
-	subContainer := container.NewMax()
+	session.Window.Canvas().SetOnTypedKey(func(k *fyne.KeyEvent) {
+		if k.Name == fyne.KeyRight {
+			session.Dashboard = "main"
+
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutDashboard())
+			removeOverlays()
+		} else if k.Name == fyne.KeyF5 {
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutIdentity())
+			removeOverlays()
+		}
+	})
+
+	subContainer := container.NewStack(
+		container.NewVBox(
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
 
 	c := container.NewBorder(
 		features,
@@ -4151,7 +6622,471 @@ func layoutWaiting(title *canvas.Text, heading *canvas.Text, sub *canvas.Text, b
 		nil,
 	)
 
-	layout := container.NewMax(
+	layout := container.NewStack(
+		frame,
+		c,
+	)
+
+	return layout
+}
+
+func layoutIdentityDetail(username string) fyne.CanvasObject {
+	var address string
+	var valid bool
+	resetResources()
+
+	wSpacer := widget.NewLabel(" ")
+
+	rectWidth := canvas.NewRectangle(color.Transparent)
+	rectWidth.SetMinSize(fyne.NewSize(ui.MaxWidth*0.99, 10))
+
+	rectWidth90 := canvas.NewRectangle(color.Transparent)
+	rectWidth90.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+	frame := &iframe{}
+
+	heading := canvas.NewText("I D E N T I T Y    D E T A I L", colors.Gray)
+	heading.TextSize = 16
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(6, 5))
+
+	labelUsername := canvas.NewText("REGISTERED  USERNAME", colors.Gray)
+	labelUsername.TextSize = 11
+	labelUsername.Alignment = fyne.TextAlignCenter
+	labelUsername.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelTransfer := canvas.NewText("  T R A N S F E R  ", colors.Gray)
+	labelTransfer.TextSize = 11
+	labelTransfer.Alignment = fyne.TextAlignCenter
+	labelTransfer.TextStyle = fyne.TextStyle{Bold: true}
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Identity", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		removeOverlays()
+	}
+
+	valueUsername := canvas.NewText(username, colors.Green)
+	valueUsername.TextSize = 22
+	valueUsername.TextStyle = fyne.TextStyle{Bold: true}
+	valueUsername.Alignment = fyne.TextAlignCenter
+
+	btnSetPrimary := widget.NewButton("Set Primary Username", nil)
+	btnSetPrimary.OnTapped = func() {
+		setPrimaryUsername(username)
+		session.Username = username
+		session.Window.SetContent(layoutIdentity())
+		removeOverlays()
+	}
+
+	btnSend := widget.NewButton("Transfer Username", nil)
+
+	inputAddress := widget.NewEntry()
+	inputAddress.PlaceHolder = "Receiver Username or Address"
+	inputAddress.Validator = func(s string) error {
+		btnSend.Text = "Transfer Username"
+		btnSend.Enable()
+		btnSend.Refresh()
+		valid, address, _ = checkUsername(s, -1)
+		if !valid {
+			_, err := globals.ParseValidateAddress(s)
+			if err != nil {
+				btnSend.Disable()
+				btnSend.Refresh()
+				err := errors.New("address does not exist")
+				inputAddress.SetValidationError(err)
+				inputAddress.Refresh()
+				return err
+			} else {
+				btnSend.Enable()
+				btnSend.Refresh()
+				address = s
+			}
+		} else {
+			btnSend.Enable()
+			btnSend.Refresh()
+		}
+
+		return nil
+	}
+
+	btnSend.OnTapped = func() {
+		if address != "" && address != engram.Disk.GetAddress().String() {
+			btnSend.Text = "Setting up transfer..."
+			btnSend.Disable()
+			btnSend.Refresh()
+			inputAddress.Disable()
+			inputAddress.Refresh()
+			err := transferUsername(username, address)
+			if err != nil {
+				address = ""
+				btnSend.Text = "Transfer failed..."
+				btnSend.Disable()
+				btnSend.Refresh()
+				inputAddress.Enable()
+				inputAddress.Refresh()
+			} else {
+				btnSend.Text = "Confirming..."
+				btnSend.Refresh()
+				go func() {
+					walletapi.WaitNewHeightBlock()
+					for {
+						found := false
+						if session.Domain == "app.Identity" {
+							usernames, err := queryUsernames()
+							if err != nil {
+								fmt.Printf("[Username] Error querying usernames: %s\n", err)
+								return
+							}
+
+							for u := range usernames {
+								if usernames[u] == username {
+									found = true
+								}
+							}
+
+							if !found {
+								fmt.Printf("[TransferOwnership] %s was successfully transfered to: %s\n", username, address)
+								session.Window.SetContent(layoutTransition())
+								session.Window.SetContent(layoutIdentity())
+								removeOverlays()
+								break
+							}
+
+						} else {
+							break
+						}
+
+						time.Sleep(time.Second * 1)
+					}
+				}()
+			}
+		}
+	}
+
+	top := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			heading,
+		),
+		rectSpacer,
+		rectSpacer,
+	)
+
+	center := container.NewStack(
+		container.NewVScroll(
+			container.NewStack(
+				rectWidth,
+				container.NewHBox(
+					layout.NewSpacer(),
+					container.NewVBox(
+						rectSpacer,
+						valueUsername,
+						rectSpacer,
+						labelUsername,
+						wSpacer,
+						container.NewHBox(
+							layout.NewSpacer(),
+							container.NewStack(
+								rectWidth90,
+								btnSetPrimary,
+							),
+							layout.NewSpacer(),
+						),
+						wSpacer,
+						container.NewStack(
+							rectWidth,
+							container.NewHBox(
+								layout.NewSpacer(),
+								line1,
+								layout.NewSpacer(),
+								labelTransfer,
+								layout.NewSpacer(),
+								line2,
+								layout.NewSpacer(),
+							),
+						),
+						wSpacer,
+						container.NewHBox(
+							layout.NewSpacer(),
+							container.NewStack(
+								rectWidth90,
+								inputAddress,
+							),
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+						container.NewHBox(
+							layout.NewSpacer(),
+							container.NewStack(
+								rectWidth90,
+								btnSend,
+							),
+							layout.NewSpacer(),
+						),
+					),
+					layout.NewSpacer(),
+				),
+			),
+		),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			rectSpacer,
+			rectSpacer,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	layout := container.NewStack(
+		frame,
+		container.NewBorder(
+			top,
+			bottom,
+			nil,
+			center,
+		),
+	)
+
+	return layout
+}
+
+func layoutWaiting(title *canvas.Text, heading *canvas.Text, sub *canvas.Text, link *widget.Hyperlink) fyne.CanvasObject {
+	resetResources()
+
+	rect := canvas.NewRectangle(color.Transparent)
+	rect.SetMinSize(fyne.NewSize(ui.Width*0.6, ui.Height*0.35))
+	rect2 := canvas.NewRectangle(color.Transparent)
+	rect2.SetMinSize(fyne.NewSize(ui.Width, 1))
+	frame := canvas.NewRectangle(color.Transparent)
+	frame.SetMinSize(fyne.NewSize(ui.Width, ui.Height))
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
+	label := canvas.NewText("PROOF-OF-WORK", colors.Gray)
+	label.TextStyle = fyne.TextStyle{Bold: true}
+	label.TextSize = 12
+	hashes := canvas.NewText(fmt.Sprintf("%d", session.RegHashes), colors.Account)
+	hashes.TextSize = 18
+
+	go func() {
+		for engram.Disk != nil {
+			hashes.Text = fmt.Sprintf("%d", session.RegHashes)
+			hashes.Refresh()
+		}
+	}()
+
+	session.Gif, _ = x.NewAnimatedGifFromResource(resourceAnimation2Gif)
+	session.Gif.SetMinSize(rect.MinSize())
+	session.Gif.Resize(rect.MinSize())
+	session.Gif.Start()
+
+	waitForm := container.NewVBox(
+		widget.NewLabel(""),
+		container.NewHBox(
+			layout.NewSpacer(),
+			title,
+			layout.NewSpacer(),
+		),
+		widget.NewLabel(""),
+		heading,
+		rectSpacer,
+		sub,
+		widget.NewLabel(""),
+		container.NewStack(
+			session.Gif,
+		),
+		widget.NewLabel(""),
+		container.NewHBox(
+			layout.NewSpacer(),
+			container.NewVBox(
+				container.NewCenter(
+					rect2,
+					hashes,
+				),
+				rectSpacer,
+				container.NewCenter(
+					rect2,
+					label,
+				),
+			),
+			layout.NewSpacer(),
+		),
+	)
+
+	grid := container.NewHBox(
+		layout.NewSpacer(),
+		waitForm,
+		layout.NewSpacer(),
+	)
+
+	footer := container.NewVBox(
+		container.NewHBox(
+			layout.NewSpacer(),
+			link,
+			layout.NewSpacer(),
+		),
+		widget.NewLabel(""),
+	)
+
+	c := container.NewBorder(
+		grid,
+		footer,
+		nil,
+		nil,
+	)
+
+	layout := container.NewStack(
+		frame,
+		c,
+	)
+
+	return layout
+}
+
+func layoutAlert(t int) fyne.CanvasObject {
+	resetResources()
+
+	rect := canvas.NewRectangle(color.Transparent)
+	rect.SetMinSize(fyne.NewSize(ui.Width*0.6, ui.Width*0.35))
+	frame := &iframe{}
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
+	wSpacer := widget.NewLabel(" ")
+
+	title := canvas.NewText("", colors.Gray)
+	title.TextStyle = fyne.TextStyle{Bold: true}
+	title.TextSize = 16
+	title.Alignment = fyne.TextAlignCenter
+
+	heading := canvas.NewText("", colors.Red)
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+	heading.TextSize = 22
+	heading.Alignment = fyne.TextAlignCenter
+
+	sub := widget.NewRichTextFromMarkdown("")
+	sub.Wrapping = fyne.TextWrapWord
+
+	labelSettings := widget.NewHyperlinkWithStyle("Review Settings", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+
+	if t == 1 {
+		title.Text = "E  R  R  O  R"
+		heading.Text = "Connection Failure"
+		sub.ParseMarkdown("Connection to " + session.Daemon + " has failed. Please review your settings and try again.")
+		labelSettings.Text = "Review Settings"
+		labelSettings.OnTapped = func() {
+			session.Window.SetContent(layoutSettings())
+		}
+	} else if t == 2 {
+		title.Text = "E  R  R  O  R"
+		heading.Text = "Write Failure"
+		sub.ParseMarkdown("Could not write data to disk, please check to make sure Engram has the proper permissions.")
+		labelSettings.Text = "Review Settings"
+		labelSettings.OnTapped = func() {
+			session.Window.SetContent(layoutMain())
+		}
+	} else {
+		title.Text = "E R R O R"
+		heading.Text = "ID-10T Error Protocol"
+		sub.ParseMarkdown("System malfunction... Please... Find... Help...")
+		labelSettings.Text = "Review Settings"
+		labelSettings.OnTapped = func() {
+			session.Window.SetContent(layoutSettings())
+		}
+	}
+
+	rectHeader := canvas.NewRectangle(color.Transparent)
+	rectHeader.SetMinSize(fyne.NewSize(ui.Width, 1))
+
+	session.Gif, _ = x.NewAnimatedGifFromResource(resourceAnimation2Gif)
+	session.Gif.SetMinSize(rect.MinSize())
+	session.Gif.Start()
+
+	alertForm := container.NewVBox(
+		wSpacer,
+		wSpacer,
+		rectHeader,
+		container.NewStack(
+			rect,
+			res.red_alert,
+		),
+		heading,
+		rectSpacer,
+		sub,
+		widget.NewLabel(""),
+	)
+
+	footer := container.NewVBox(
+		container.NewHBox(
+			layout.NewSpacer(),
+			labelSettings,
+			layout.NewSpacer(),
+		),
+		wSpacer,
+	)
+
+	features := container.NewCenter(
+		layout.NewSpacer(),
+		alertForm,
+		layout.NewSpacer(),
+	)
+
+	c := container.NewBorder(
+		features,
+		footer,
+		nil,
+		nil,
+	)
+
+	layout := container.NewStack(
 		frame,
 		c,
 	)
@@ -4177,26 +7112,39 @@ func layoutHistory() fyne.CanvasObject {
 	details_header.TextSize = 22
 	details_header.TextStyle = fyne.TextStyle{Bold: true}
 
+	frame := &iframe{}
+	rectWidth := canvas.NewRectangle(color.Transparent)
+	rectWidth.SetMinSize(fyne.NewSize(ui.MaxWidth, 10))
+	rectWidth90 := canvas.NewRectangle(color.Transparent)
+	rectWidth90.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+	heading := canvas.NewText("H I S T O R Y", colors.Gray)
+	heading.TextSize = 16
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
 	rect := canvas.NewRectangle(color.Transparent)
-	rect.SetMinSize(fyne.NewSize(200, 35))
+	rect.SetMinSize(fyne.NewSize(ui.Width*0.3, 35))
+
+	rectMid := canvas.NewRectangle(color.Transparent)
+	rectMid.SetMinSize(fyne.NewSize(ui.Width*0.35, 35))
+
+	results := canvas.NewText("", colors.Green)
+	results.TextSize = 13
 
 	listData = binding.BindStringList(&data)
 	listBox = widget.NewListWithData(listData,
 		func() fyne.CanvasObject {
 			return container.NewHBox(
-				container.NewMax(
+				container.NewStack(
 					rect,
 					widget.NewLabel(""),
 				),
-				container.NewMax(
-					rect,
+				container.NewStack(
+					rectMid,
 					widget.NewLabel(""),
 				),
-				container.NewMax(
-					rect,
-					widget.NewLabel(""),
-				),
-				container.NewMax(
+				container.NewStack(
 					rect,
 					widget.NewLabel(""),
 				),
@@ -4209,19 +7157,62 @@ func layoutHistory() fyne.CanvasObject {
 				return
 			}
 
-			split := strings.Split(str, ";")
+			split := strings.Split(str, ";;;")
 
 			co.(*fyne.Container).Objects[0].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[0])
 			co.(*fyne.Container).Objects[1].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[1])
-			co.(*fyne.Container).Objects[2].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[2])
-			co.(*fyne.Container).Objects[3].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[3])
+			co.(*fyne.Container).Objects[2].(*fyne.Container).Objects[1].(*widget.Label).SetText(split[3])
 		})
 
-	menu := widget.NewSelect([]string{"Normal", "Coinbase", "Smart Contracts", "Messages"}, nil)
+	menu := widget.NewSelect([]string{"Normal", "Coinbase", "Messages"}, nil)
 	menu.PlaceHolder = "(Select Transaction Type)"
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
+	rectList := canvas.NewRectangle(color.Transparent)
+	rectList.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.60))
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Dashboard", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
+	}
+
+	label := canvas.NewText(view, colors.Account)
+	label.TextSize = 15
+	label.TextStyle = fyne.TextStyle{Bold: true}
+
 	menu.OnChanged = func(s string) {
 		switch s {
 		case "Normal":
+			listBox.UnselectAll()
+			results.Text = "  Scanning..."
+			results.Refresh()
+			count := 0
 			data = nil
 			listData.Set(nil)
 			entries = engram.Disk.Show_Transfers(zeroscid, false, true, true, 0, engram.Disk.Get_Height(), "", "", 0, 0)
@@ -4237,7 +7228,8 @@ func layoutHistory() fyne.CanvasObject {
 
 						if !entries[e].Coinbase {
 							timefmt := entries[e].Time
-							stamp = string(timefmt.Format(time.RFC822))
+							//stamp = string(timefmt.Format(time.RFC822))
+							stamp = timefmt.Format("2006-01-02")
 							height = strconv.FormatUint(entries[e].Height, 10)
 							amount := ""
 							txid = entries[e].TXID
@@ -4250,16 +7242,50 @@ func layoutHistory() fyne.CanvasObject {
 								amount = globals.FormatMoney(entries[e].Amount)
 							}
 
-							data = append(data, direction+";"+amount+";"+height+";"+stamp+";"+txid)
+							count += 1
+							data = append(data, direction+";;;"+amount+";;;"+height+";;;"+stamp+";;;"+txid)
 						}
 					}
 
+					results.Text = fmt.Sprintf("  Results:  %d", count)
+					results.Refresh()
+
 					listData.Set(data)
+
+					listBox.OnSelected = func(id widget.ListItemID) {
+						//var zeroscid crypto.Hash
+						split := strings.Split(data[id], ";;;")
+						result := engram.Disk.Get_Payments_TXID(split[4])
+
+						if result.TXID == "" {
+							label.Text = "---"
+						} else {
+							label.Text = result.TXID
+						}
+						label.Refresh()
+
+						overlay := session.Window.Canvas().Overlays()
+						overlay.Add(
+							container.NewStack(
+								&iframe{},
+								canvas.NewRectangle(colors.DarkMatter),
+							),
+						)
+						overlay.Add(layoutHistoryDetail(split[4]))
+						listBox.UnselectAll()
+					}
 					listBox.Refresh()
 					listBox.ScrollToBottom()
 				}()
+			} else {
+				results.Text = fmt.Sprintf("  Results:  %d", count)
+				results.Refresh()
 			}
 		case "Coinbase":
+			listBox.UnselectAll()
+			results.Text = "  Scanning..."
+			results.Refresh()
+			count := 0
 			data = nil
 			listData.Set(nil)
 			entries = engram.Disk.Show_Transfers(zeroscid, true, true, true, 0, engram.Disk.Get_Height(), "", "", 0, 0)
@@ -4274,98 +7300,38 @@ func layoutHistory() fyne.CanvasObject {
 						entries[e].ProcessPayload()
 
 						if entries[e].Coinbase {
-							direction = "Miner Reward"
+							direction = "Network"
 							timefmt := entries[e].Time
-							stamp = string(timefmt.Format(time.RFC822))
+							stamp = timefmt.Format("2006-01-02")
 							height = strconv.FormatUint(entries[e].Height, 10)
 							amount := globals.FormatMoney(entries[e].Amount)
 							txid = entries[e].TXID
 
-							data = append(data, direction+";"+amount+";"+height+";"+stamp+";"+txid)
+							count += 1
+							data = append(data, direction+";;;"+amount+";;;"+height+";;;"+stamp+";;;"+txid)
 						}
 					}
 
+					results.Text = fmt.Sprintf("  Results:  %d", count)
+					results.Refresh()
+
 					listData.Set(data)
+
+					listBox.OnSelected = func(id widget.ListItemID) {
+						listBox.UnselectAll()
+					}
 					listBox.Refresh()
 					listBox.ScrollToBottom()
 				}()
+			} else {
+				results.Text = fmt.Sprintf("  Results:  %d", count)
+				results.Refresh()
 			}
-		case "Smart Contracts":
-			data = nil
-			listData.Set(nil)
-			if gnomon.Active == 1 && engram.Disk != nil {
-				if engram.Disk.GetNetwork() {
-					gnomon.DB.DBFolder = "datashards/gnomon"
-				} else {
-					gnomon.DB.DBFolder = "datashards/gnomon_testnet"
-				}
-				scList := gnomon.DB.GetAllNormalTxWithSCIDByAddr(engram.Disk.GetAddress().String())
-				for sc := range scList {
-					scid := crypto.HashHexToHash(scList[sc].Scid)
-					height := strconv.FormatInt(scList[sc].Height, 10)
-					bal, _ := engram.Disk.Get_Balance_scid(scid)
-					balance := globals.FormatMoney(bal)
-
-					data = append(data, balance+";"+scList[sc].Scid+";"+height+";")
-				}
-
-				listData.Set(data)
-				listBox.Refresh()
-				listBox.ScrollToBottom()
-			}
-			/*
-				entries = engram.Disk.Show_Transfers(zeroscid, false, true, true, 0, engram.Disk.Get_Height(), "", "", 0, 0)
-
-				if entries != nil {
-					go func() {
-						for e := range entries {
-							var height string
-							var action string
-							var stamp string
-							var scid string
-
-							entries[e].ProcessPayload()
-
-							if entries[e].Payload_RPC.HasValue("SC_ID", "H") {
-								scid = entries[e].Payload_RPC.Value("SC_ID", "H").(string)
-
-								for r := range entries[e].Payload_RPC {
-									action = entries[e].Payload_RPC[r].Value.(string)
-									timefmt := entries[e].Time
-									stamp = string(timefmt.Format(time.RFC822))
-									height = strconv.FormatUint(entries[e].Height, 10)
-									txid = entries[e].TXID
-									fmtSCID := "..." + scid[:10]
-
-									data = append(data, action+";"+fmtSCID+";"+height+";"+stamp+";"+txid)
-								}
-							}
-
-
-								tx := gnomon.DB.GetAllSCIDInvokeDetailsBySigner(entries[e].TXID, engram.Disk.GetAddress().String())
-
-								if len(tx) > 0 {
-									for t := range tx {
-										action = tx[t].Entrypoint
-									}
-
-									timefmt := entries[e].Time
-									stamp = string(timefmt.Format(time.RFC822))
-									height = strconv.FormatUint(entries[e].Height, 10)
-
-									data = append(data, action+";"+entries[e].TXID+";"+height+";"+stamp)
-								}
-
-
-						}
-
-						listData.Set(data)
-						listBox.Refresh()
-						listBox.ScrollToBottom()
-					}()
-			*/
-
 		case "Messages":
+			listBox.UnselectAll()
+			results.Text = "  Scanning..."
+			results.Refresh()
+			count := 0
 			data = nil
 			listData.Set(nil)
 			entries = engram.Disk.Get_Payments_DestinationPort(zeroscid, uint64(1337), 0)
@@ -4380,7 +7346,8 @@ func layoutHistory() fyne.CanvasObject {
 						entries[e].ProcessPayload()
 
 						timefmt := entries[e].Time
-						stamp = string(timefmt.Format(time.RFC822))
+						//stamp = string(timefmt.Format(time.RFC822))
+						stamp = timefmt.Format("2006-01-02")
 
 						temp := entries[e].Incoming
 						if !temp {
@@ -4389,481 +7356,710 @@ func layoutHistory() fyne.CanvasObject {
 							direction = "Received"
 						}
 						if entries[e].Payload_RPC.HasValue(rpc.RPC_COMMENT, rpc.DataString) {
+							contact := ""
 							username := ""
 							if entries[e].Payload_RPC.HasValue(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString) {
-								username = entries[e].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string)
-								if len(username) > 15 {
-									username = username[0:15] + "..."
+								contact = entries[e].Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string)
+								if len(contact) > 10 {
+									username = contact[0:10] + ".."
+								} else {
+									username = contact
 								}
 							}
 
 							comment = entries[e].Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string)
-							if len(comment) > 15 {
-								comment = comment[0:15] + "..."
+							if len(comment) > 10 {
+								comment = comment[0:10] + ".."
 							}
 
 							txid = entries[e].TXID
-
-							data = append(data, direction+";"+username+";"+comment+";"+stamp+";"+txid)
+							count += 1
+							data = append(data, direction+";;;"+username+";;;"+comment+";;;"+stamp+";;;"+txid+";;;"+contact)
 						}
 					}
 
+					results.Text = fmt.Sprintf("  Results:  %d", count)
+					results.Refresh()
+
 					listData.Set(data)
+
+					listBox.OnSelected = func(id widget.ListItemID) {
+						split := strings.Split(data[id], ";;;")
+						overlay := session.Window.Canvas().Overlays()
+						overlay.Add(
+							container.NewStack(
+								&iframe{},
+								canvas.NewRectangle(colors.DarkMatter),
+							),
+						)
+						overlay.Add(layoutHistoryDetail(split[4]))
+						listBox.UnselectAll()
+						listBox.Refresh()
+					}
+
 					listBox.Refresh()
 					listBox.ScrollToBottom()
 				}()
+			} else {
+				results.Text = fmt.Sprintf("  Results:  %d", count)
+				results.Refresh()
 			}
 		default:
 
 		}
 	}
 
-	btnClose := widget.NewButton("Return", nil)
-
-	rectSpacer := canvas.NewRectangle(color.Transparent)
-	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
-	rectList := canvas.NewRectangle(color.Transparent)
-	rectList.SetMinSize(fyne.NewSize(800, MIN_HEIGHT-200))
-	rect1 := canvas.NewRectangle(colors.DarkMatter)
-	rect1.SetMinSize(fyne.NewSize(245, 100))
-	rect2 := canvas.NewRectangle(colors.DarkMatter)
-	rect2.SetMinSize(fyne.NewSize(245, 40))
-
-	label := canvas.NewText(view, colors.Account)
-	label.TextSize = 15
-	label.TextStyle = fyne.TextStyle{Bold: true}
-
-	sub := canvas.NewText("   ", colors.Gray)
-	sub.TextSize = 14
-	sub.TextStyle = fyne.TextStyle{Bold: true}
-
-	txidText := widget.NewEntry()
-	txidText.PlaceHolder = "N/A"
-	txidText.Disable()
-
-	txidText_label := canvas.NewText("   TRANSACTION  ID", colors.Gray)
-	txidText_label.TextSize = 14
-	txidText_label.TextStyle = fyne.TextStyle{Bold: true}
-
-	amount := canvas.NewText("", colors.Account)
-	amount.TextSize = 34
-	amount.TextStyle = fyne.TextStyle{Bold: true}
-
-	amount_label := canvas.NewText("   AMOUNT", colors.Gray)
-	amount_label.TextSize = 14
-	amount_label.TextStyle = fyne.TextStyle{Bold: true}
-
-	proof := widget.NewEntry()
-	proof.PlaceHolder = "N/A"
-	proof.Disable()
-
-	proof_label := canvas.NewText("   PROOF", colors.Gray)
-	proof_label.TextSize = 14
-	proof_label.TextStyle = fyne.TextStyle{Bold: true}
-
-	hash := widget.NewEntry()
-	hash.PlaceHolder = "N/A"
-	hash.Disable()
-
-	hash_label := canvas.NewText("   BLOCK HASH", colors.Gray)
-	hash_label.TextSize = 14
-	hash_label.TextStyle = fyne.TextStyle{Bold: true}
-
-	block := canvas.NewText("", colors.Account)
-	block.TextSize = 22
-	block.TextStyle = fyne.TextStyle{Bold: true}
-
-	block_label := canvas.NewText("BLOCK", colors.Gray)
-	block_label.TextSize = 14
-	block_label.TextStyle = fyne.TextStyle{Bold: false}
-
-	fees := canvas.NewText("", colors.Account)
-	fees.TextSize = 22
-	fees.TextStyle = fyne.TextStyle{Bold: true}
-
-	fees_label := canvas.NewText("FEES", colors.Gray)
-	fees_label.TextSize = 14
-	fees_label.TextStyle = fyne.TextStyle{Bold: false}
-
-	stamp := canvas.NewText("", colors.Account)
-	stamp.TextSize = 22
-	stamp.TextStyle = fyne.TextStyle{Bold: true}
-
-	stamp_label := canvas.NewText("", colors.Gray)
-	stamp_label.TextSize = 14
-	stamp_label.TextStyle = fyne.TextStyle{Bold: false}
-
-	btnView := widget.NewButton("  View in Explorer  ", nil)
-
-	details := container.NewMax(
-		container.NewBorder(
-			container.NewHBox(
-				container.NewVBox(
-					rectSpacer,
-					details_header,
-				),
-				layout.NewSpacer(),
-				container.NewVBox(
-					rectSpacer,
-					container.NewHBox(
-						container.NewMax(
-							btnView,
-						),
-						widget.NewLabel(""),
-					),
-				),
-			),
-			btnClose,
-			container.NewMax(
-				rectList,
-				container.NewVBox(
-					widget.NewLabel(""),
-					container.NewHBox(
-						layout.NewSpacer(),
-						rectSpacer,
-						container.NewMax(
-							rect1,
-							container.NewCenter(
-								container.NewVBox(
-									block,
-								),
-							),
-						),
-						rectSpacer,
-						container.NewMax(
-							rect1,
-							container.NewCenter(fees),
-						),
-						rectSpacer,
-						container.NewMax(
-							rect1,
-							container.NewCenter(stamp),
-						),
-						layout.NewSpacer(),
-					),
-					container.NewHBox(
-						layout.NewSpacer(),
-						rectSpacer,
-						container.NewMax(
-							rect2,
-							container.NewCenter(
-								block_label,
-							),
-						),
-						rectSpacer,
-						container.NewMax(
-							rect2,
-							container.NewCenter(
-								fees_label,
-							),
-						),
-						rectSpacer,
-						container.NewMax(
-							rect2,
-							container.NewCenter(
-								stamp_label,
-							),
-						),
-						layout.NewSpacer(),
-					),
-					widget.NewLabel(""),
-					container.NewVBox(
-						amount,
-						amount_label,
-					),
-					widget.NewLabel(""),
-					container.NewVBox(
-						txidText_label,
-						txidText,
-					),
-					widget.NewLabel(""),
-					container.NewVBox(
-						proof_label,
-						proof,
-					),
-					widget.NewLabel(""),
-					container.NewVBox(
-						hash_label,
-						hash,
-					),
-				),
-			),
-			nil,
-		),
-	)
-	details.Hide()
-
-	listing := container.NewMax(
-		container.NewBorder(
+	center := container.NewStack(
+		rectWidth,
+		container.NewHBox(
+			layout.NewSpacer(),
 			container.NewVBox(
-				rectSpacer,
-				header,
-				rectSpacer,
 				menu,
 				rectSpacer,
+				results,
+				rectSpacer,
+				rectSpacer,
+				container.NewStack(
+					rectList,
+					listBox,
+				),
 			),
+			layout.NewSpacer(),
+		),
+	)
+
+	top := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			heading,
+		),
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			center,
+		),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	layout := container.NewStack(
+		frame,
+		container.NewBorder(
+			top,
+			bottom,
 			nil,
-			container.NewMax(
-				rectList,
-				listBox,
-			),
 			nil,
 		),
 	)
-	listing.Show()
 
-	listBox.OnSelected = func(id widget.ListItemID) {
-		split := strings.Split(data[id], ";")
-		result := engram.Disk.Get_Payments_TXID(split[4])
+	return layout
+}
 
-		listing.Hide()
+func layoutHistoryDetail(txid string) fyne.CanvasObject {
+	resetResources()
 
-		if result.TXID == "" {
-			label.Text = "   ---"
-		} else {
-			label.Text = "   " + result.TXID
-		}
-		label.Refresh()
+	wSpacer := widget.NewLabel(" ")
 
-		btnView.OnTapped = func() {
-			if engram.Disk.GetNetwork() {
-				link, _ := url.Parse("https://explorer.dero.io/tx/" + result.TXID)
-				_ = fyne.CurrentApp().OpenURL(link)
-			} else {
-				link, _ := url.Parse("https://testnetexplorer.dero.io/tx/" + result.TXID)
-				_ = fyne.CurrentApp().OpenURL(link)
-			}
-		}
+	rectWidth := canvas.NewRectangle(color.Transparent)
+	rectWidth.SetMinSize(fyne.NewSize(ui.MaxWidth*0.99, 10))
 
-		sub.Text = fmt.Sprintf("        POSTIION IN BLOCK:  %d", result.TransactionPos)
-		sub.Refresh()
+	rectWidth90 := canvas.NewRectangle(color.Transparent)
+	rectWidth90.SetMinSize(fyne.NewSize(ui.Width, 10))
 
-		if result.Incoming {
-			amount.Text = "    " + globals.FormatMoney(result.Amount)
-			amount_label.Text = "          RECEIVED"
-		} else {
-			amount.Text = "    (" + globals.FormatMoney(result.Amount) + ")"
-			amount_label.Text = "          SENT"
-		}
-		amount.Refresh()
-		amount_label.Refresh()
+	frame := &iframe{}
 
-		txidText.Text = result.TXID
-		txidText.Refresh()
+	heading := canvas.NewText("T R A N S A C T I O N    D E T A I L", colors.Gray)
+	heading.TextSize = 16
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
 
-		proof.Text = result.Proof
-		proof.Refresh()
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(6, 5))
 
-		block.Text = fmt.Sprintf("%d", result.Height)
-		block.Refresh()
+	labelTXID := canvas.NewText("TRANSACTION  ID", colors.Gray)
+	labelTXID.TextSize = 11
+	labelTXID.Alignment = fyne.TextAlignLeading
+	labelTXID.TextStyle = fyne.TextStyle{Bold: true}
 
-		fees.Text = globals.FormatMoney(result.Fees)
-		fees.Refresh()
+	labelAmount := canvas.NewText("AMOUNT", colors.Gray)
+	labelAmount.TextSize = 11
+	labelAmount.Alignment = fyne.TextAlignLeading
+	labelAmount.TextStyle = fyne.TextStyle{Bold: true}
 
-		stamp.Text = result.Time.Local().Format("Jan 02, 2006")
-		stamp.Refresh()
+	labelDirection := canvas.NewText("PAYMENT  DIRECTION", colors.Gray)
+	labelDirection.TextSize = 11
+	labelDirection.Alignment = fyne.TextAlignLeading
+	labelDirection.TextStyle = fyne.TextStyle{Bold: true}
 
-		stamp_label.Text = result.Time.Local().Format(time.Kitchen)
-		stamp_label.Refresh()
+	labelMember := canvas.NewText("", colors.Gray)
+	labelMember.TextSize = 11
+	labelMember.Alignment = fyne.TextAlignLeading
+	labelMember.TextStyle = fyne.TextStyle{Bold: true}
 
-		hash.Text = result.BlockHash
-		hash.Refresh()
+	labelProof := canvas.NewText("TRANSACTION  PROOF", colors.Gray)
+	labelProof.TextSize = 11
+	labelProof.Alignment = fyne.TextAlignLeading
+	labelProof.TextStyle = fyne.TextStyle{Bold: true}
 
-		details.Show()
+	labelDestPort := canvas.NewText("DESTINATION  PORT", colors.Gray)
+	labelDestPort.TextSize = 11
+	labelDestPort.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelSourcePort := canvas.NewText("SOURCE  PORT", colors.Gray)
+	labelSourcePort.TextSize = 11
+	labelSourcePort.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelFees := canvas.NewText("TRANSACTION  FEES", colors.Gray)
+	labelFees.TextSize = 11
+	labelFees.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelPayload := canvas.NewText("PAYLOAD", colors.Gray)
+	labelPayload.TextSize = 11
+	labelPayload.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelHeight := canvas.NewText("BLOCK  HEIGHT", colors.Gray)
+	labelHeight.TextSize = 11
+	labelHeight.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelReply := canvas.NewText("REPLY  ADDRESS", colors.Gray)
+	labelReply.TextSize = 11
+	labelReply.TextStyle = fyne.TextStyle{Bold: true}
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	details := engram.Disk.Get_Payments_TXID(txid)
+
+	stamp := string(details.Time.Format(time.RFC822))
+	height := strconv.FormatUint(details.Height, 10)
+
+	valueMember := widget.NewRichTextFromMarkdown(" ")
+	valueMember.Wrapping = fyne.TextWrapBreak
+
+	valueReply := widget.NewRichTextFromMarkdown("--")
+	valueReply.Wrapping = fyne.TextWrapBreak
+
+	if details.Payload_RPC.HasValue(rpc.RPC_REPLYBACK_ADDRESS, rpc.DataAddress) {
+		address := details.Payload_RPC.Value(rpc.RPC_REPLYBACK_ADDRESS, rpc.DataAddress).(rpc.Address)
+		valueReply.ParseMarkdown("" + address.String())
 	}
 
-	btnClose.OnTapped = func() {
-		if details.Hidden {
-			history.Window.Close()
-			history.Window = nil
-		} else {
-			details.Hide()
-			listing.Show()
+	valuePayload := widget.NewRichTextFromMarkdown("--")
+	valuePayload.Wrapping = fyne.TextWrapBreak
+
+	if details.Payload_RPC.HasValue(rpc.RPC_COMMENT, rpc.DataString) {
+		if details.Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string) != "" {
+			valuePayload.ParseMarkdown("" + details.Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string))
 		}
 	}
 
-	layout := container.NewMax(
-		listing,
-		details,
+	valueDirection := canvas.NewText("", colors.Account)
+	valueDirection.TextSize = 22
+	valueDirection.TextStyle = fyne.TextStyle{Bold: true}
+	if details.Incoming {
+		valueDirection.Text = " Received"
+		labelMember.Text = "SENDER  ADDRESS"
+		if details.Sender == "" || details.Sender == engram.Disk.GetAddress().String() {
+			valueMember.ParseMarkdown("--")
+		} else {
+			valueMember.ParseMarkdown("" + details.Sender)
+		}
+	} else {
+		valueDirection.Text = " Sent"
+		labelMember.Text = "RECEIVER  ADDRESS"
+		valueMember.ParseMarkdown("" + details.Destination)
+	}
+
+	valueTime := canvas.NewText(stamp, colors.Account)
+	valueTime.TextSize = 14
+	valueTime.TextStyle = fyne.TextStyle{Bold: true}
+
+	valueFees := canvas.NewText(" "+globals.FormatMoney(details.Fees), colors.Account)
+	valueFees.TextSize = 22
+	valueFees.TextStyle = fyne.TextStyle{Bold: true}
+
+	valueHeight := canvas.NewText(" "+height, colors.Account)
+	valueHeight.TextSize = 22
+	valueHeight.TextStyle = fyne.TextStyle{Bold: true}
+
+	valueTXID := widget.NewRichTextFromMarkdown("")
+	valueTXID.Wrapping = fyne.TextWrapBreak
+	valueTXID.ParseMarkdown("" + txid)
+
+	valueAmount := canvas.NewText("", colors.Account)
+	valueAmount.TextSize = 22
+	valueAmount.TextStyle = fyne.TextStyle{Bold: true}
+	valueAmount.Text = " " + globals.FormatMoney(details.Amount)
+
+	valuePort := canvas.NewText("", colors.Account)
+	valuePort.TextSize = 22
+	valuePort.TextStyle = fyne.TextStyle{Bold: true}
+	valuePort.Text = " " + strconv.FormatUint(details.DestinationPort, 10)
+
+	valueSourcePort := canvas.NewText("", colors.Account)
+	valueSourcePort.TextSize = 22
+	valueSourcePort.TextStyle = fyne.TextStyle{Bold: true}
+	valueSourcePort.Text = " " + strconv.FormatUint(details.SourcePort, 10)
+
+	btnView := widget.NewButton("View in Explorer", nil)
+	btnView.OnTapped = func() {
+		if engram.Disk.GetNetwork() {
+			link, _ := url.Parse("https://explorer.dero.io/tx/" + txid)
+			_ = fyne.CurrentApp().OpenURL(link)
+		} else {
+			link, _ := url.Parse("https://testnetexplorer.dero.io/tx/" + txid)
+			_ = fyne.CurrentApp().OpenURL(link)
+		}
+	}
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to History", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		overlay := session.Window.Canvas().Overlays()
+		overlay.Top().Hide()
+		overlay.Remove(overlay.Top())
+		overlay.Remove(overlay.Top())
+	}
+
+	linkAddress := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkAddress.OnTapped = func() {
+		session.Window.Clipboard().SetContent(valueMember.String())
+	}
+
+	linkReplyAddress := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkReplyAddress.OnTapped = func() {
+		if _, ok := details.Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string); ok {
+			session.Window.Clipboard().SetContent(details.Payload_RPC.Value(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString).(string))
+		}
+	}
+
+	linkTXID := widget.NewHyperlinkWithStyle("Copy Transaction ID", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkTXID.OnTapped = func() {
+		session.Window.Clipboard().SetContent(txid)
+	}
+
+	linkProof := widget.NewHyperlinkWithStyle("Copy Transaction Proof", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkProof.OnTapped = func() {
+		session.Window.Clipboard().SetContent(details.Proof)
+	}
+
+	linkPayload := widget.NewHyperlinkWithStyle("Copy Payload", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkPayload.OnTapped = func() {
+		if _, ok := details.Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string); ok {
+			session.Window.Clipboard().SetContent(details.Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string))
+		}
+	}
+
+	top := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			heading,
+		),
+		rectSpacer,
+		container.NewCenter(
+			valueTime,
+		),
+		rectSpacer,
+		rectSpacer,
+	)
+
+	center := container.NewStack(
+		container.NewVScroll(
+			container.NewStack(
+				rectWidth,
+				container.NewHBox(
+					layout.NewSpacer(),
+					container.NewVBox(
+						rectSpacer,
+						labelDirection,
+						rectSpacer,
+						valueDirection,
+						rectSpacer,
+						rectSpacer,
+						labelAmount,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							valueAmount,
+						),
+						rectSpacer,
+						rectSpacer,
+						labelTXID,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							valueTXID,
+						),
+						container.NewVBox(
+							container.NewHBox(
+								linkTXID,
+								layout.NewSpacer(),
+							),
+							container.NewHBox(
+								linkProof,
+								layout.NewSpacer(),
+							),
+						),
+						rectSpacer,
+						rectSpacer,
+						labelMember,
+						rectSpacer,
+						valueMember,
+						container.NewHBox(
+							linkAddress,
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+						labelReply,
+						rectSpacer,
+						valueReply,
+						container.NewHBox(
+							linkReplyAddress,
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+						labelHeight,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							valueHeight,
+						),
+						rectSpacer,
+						rectSpacer,
+						labelFees,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							valueFees,
+						),
+						rectSpacer,
+						rectSpacer,
+						labelPayload,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							valuePayload,
+						),
+						container.NewVBox(
+							container.NewHBox(
+								linkPayload,
+								layout.NewSpacer(),
+							),
+						),
+						rectSpacer,
+						rectSpacer,
+						labelDestPort,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							valuePort,
+						),
+						rectSpacer,
+						rectSpacer,
+						labelSourcePort,
+						rectSpacer,
+						container.NewStack(
+							rectWidth90,
+							valueSourcePort,
+						),
+						wSpacer,
+						btnView,
+						wSpacer,
+					),
+					layout.NewSpacer(),
+				),
+			),
+		),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			rectSpacer,
+			rectSpacer,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	layout := container.NewStack(
+		frame,
+		container.NewBorder(
+			top,
+			bottom,
+			nil,
+			center,
+		),
 	)
 
 	return layout
 }
 
-func layoutAssets() fyne.CanvasObject {
-	layout := container.NewMax()
-
-	return layout
-}
-
-func layoutAccount() fyne.CanvasObject {
+func layoutDatapad() fyne.CanvasObject {
 	resetResources()
-
-	rect := canvas.NewRectangle(color.Transparent)
-	rect.SetMinSize(fyne.NewSize(200, 233))
-	rectScroll := canvas.NewRectangle(color.Transparent)
-	rectScroll.SetMinSize(fyne.NewSize(300, 450))
-	frame := canvas.NewRectangle(color.Transparent)
-	frame.SetMinSize(fyne.NewSize(MIN_WIDTH, MIN_HEIGHT))
-	rectSpacer := canvas.NewRectangle(color.Transparent)
-	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
-
-	title := canvas.NewText("M Y   A C C O U N T", colors.Gray)
+	session.Domain = "app.datapad"
+	title := canvas.NewText("D A T A P A D", colors.Gray)
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.TextSize = 16
 
-	heading := canvas.NewText("..."+engram.Disk.GetAddress().String()[len(engram.Disk.GetAddress().String())-10:len(engram.Disk.GetAddress().String())], colors.Green)
+	heading := canvas.NewText("", colors.Green)
 	heading.TextSize = 22
 	heading.Alignment = fyne.TextAlignCenter
 	heading.TextStyle = fyne.TextStyle{Bold: true}
 
-	sub := canvas.NewText("ADDRESS", colors.Gray)
-	sub.TextSize = 14
-	sub.Alignment = fyne.TextAlignCenter
-	sub.TextStyle = fyne.TextStyle{Bold: true}
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	catChange := canvas.NewText("CHANGE PASSWORD", colors.Gray)
-	catChange.TextStyle = fyne.TextStyle{Bold: true}
-	catChange.TextSize = 14
-	catChange.Alignment = fyne.TextAlignCenter
+	entryNewPad := widget.NewEntry()
+	entryNewPad.MultiLine = false
+	entryNewPad.Wrapping = fyne.TextWrap(fyne.TextTruncateClip)
 
-	btnCancel := widget.NewButton("Back", nil)
-	btnCopyAddress := widget.NewButton("Copy Address", nil)
-	btnCopySeed := widget.NewButton("Copy Recovery Words", nil)
-
-	address := widget.NewEntry()
-	address.OnChanged = func(s string) {
-		setDaemon(s)
-	}
-	address.PlaceHolder = "Daemon Address"
-	address.SetText(getDaemon())
-	address.Refresh()
-
-	btnCancel.OnTapped = func() {
-		session.Domain = "app.wallet"
-		resizeWindow(MIN_WIDTH, MIN_HEIGHT)
-		session.Window.SetContent(layoutTransition())
-		session.Window.SetContent(layoutDashboard())
-	}
-
-	btnCopyAddress.OnTapped = func() {
-		session.Window.Clipboard().SetContent(engram.Disk.GetAddress().String())
-		session.Window.Clipboard().SetContent(engram.Disk.GetAddress().String())
-	}
-
-	btnCopySeed.OnTapped = func() {
-		session.Window.Clipboard().SetContent(engram.Disk.GetSeed())
-		session.Window.Clipboard().SetContent(engram.Disk.GetSeed())
-	}
-
-	errorText := canvas.NewText("", colors.Red)
-	errorText.Alignment = fyne.TextAlignCenter
-	errorText.TextSize = 12
-
-	curPass := widget.NewEntry()
-	curPass.Password = true
-	curPass.PlaceHolder = "Current Password"
-
-	newPass := widget.NewEntry()
-	newPass.Password = true
-	newPass.PlaceHolder = "New Password"
-
-	confirm := widget.NewEntry()
-	confirm.Password = true
-	confirm.PlaceHolder = "Confirm Password"
-
-	btnChange := widget.NewButton("Submit", nil)
-	btnChange.OnTapped = func() {
-		errorText.Text = ""
-		errorText.Color = colors.Red
-		errorText.Refresh()
-		if engram.Disk.Check_Password(curPass.Text) {
-			if newPass.Text == confirm.Text && newPass.Text != "" {
-				err := engram.Disk.Set_Encrypted_Wallet_Password(newPass.Text)
-				if err != nil {
-					errorText.Text = "Error changing password."
-					errorText.Refresh()
-				} else {
-					curPass.Text = ""
-					curPass.Refresh()
-					newPass.Text = ""
-					newPass.Refresh()
-					confirm.Text = ""
-					confirm.Refresh()
-					errorText.Text = "Password updated successfully."
-					errorText.Color = colors.Green
-					errorText.Refresh()
-				}
-			} else {
-				errorText.Text = "New passwords do not match."
-				errorText.Refresh()
-			}
+	btnAdd := widget.NewButton(" Create ", nil)
+	btnAdd.Disable()
+	btnAdd.OnTapped = func() {
+		err := StoreEncryptedValue("Datapads", []byte(entryNewPad.Text), []byte(""))
+		if err != nil {
+			btnAdd.Text = "Error creating new Datapad"
+			btnAdd.Disable()
+			btnAdd.Refresh()
 		} else {
-			errorText.Text = "Incorrect password entered."
-			errorText.Refresh()
+			session.Datapad = entryNewPad.Text
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutDatapad())
+			removeOverlays()
 		}
 	}
 
-	res.gram.SetMinSize(fyne.NewSize(300, 185))
-	res.gram_footer.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_header.SetMinSize(fyne.NewSize(300, 80))
-	res.rpc_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.home_footer.SetMinSize(fyne.NewSize(300, 20))
-	res.nft_footer.SetMinSize(fyne.NewSize(300, 20))
+	entryNewPad.PlaceHolder = "Datapad Name"
+	entryNewPad.Validator = func(s string) error {
+		session.Datapad = s
+		if len(s) > 0 {
+			_, err := GetEncryptedValue("Datapads", []byte(s))
+			if err == nil {
+				btnAdd.Text = "Datapad already exists"
+				btnAdd.Disable()
+				btnAdd.Refresh()
+				err := errors.New("Username already exists")
+				entryNewPad.SetValidationError(err)
+				return err
+			} else {
+				btnAdd.Text = "Create"
+				btnAdd.Enable()
+				btnAdd.Refresh()
+				return nil
+			}
+		} else {
+			btnAdd.Text = "Create"
+			btnAdd.Disable()
+			err := errors.New("Please enter a Datapad name")
+			entryNewPad.SetValidationError(err)
+			btnAdd.Refresh()
+			return err
+		}
+	}
+	entryNewPad.OnChanged = func(s string) {
+		entryNewPad.Validate()
+	}
 
-	formSettings := container.NewVBox(
-		btnCopyAddress,
-		btnCopySeed,
-		widget.NewLabel(""),
-		catChange,
-		rectSpacer,
-		rectSpacer,
-		curPass,
-		widget.NewSeparator(),
-		newPass,
-		confirm,
-		rectSpacer,
-		errorText,
-		rectSpacer,
-		btnChange,
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
 	)
 
-	scrollBox := container.NewVScroll(
-		container.NewHBox(
-			layout.NewSpacer(),
-			container.NewMax(
-				rectScroll,
-				formSettings,
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Dashboard", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
+	}
+
+	frame := &iframe{}
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
+	rectList := canvas.NewRectangle(color.Transparent)
+	rectList.SetMinSize(fyne.NewSize(ui.Width, 35))
+	rectListBox := canvas.NewRectangle(color.Transparent)
+	rectListBox.SetMinSize(fyne.NewSize(ui.Width, 350))
+
+	var padData []string
+
+	shard, err := GetShard()
+	if err != nil {
+		padData = []string{}
+	}
+
+	store, err := graviton.NewDiskStore(shard)
+	if err != nil {
+		padData = []string{}
+	}
+
+	ss, err := store.LoadSnapshot(0)
+
+	if err != nil {
+		padData = []string{}
+	}
+
+	tree, err := ss.GetTree("Datapads")
+	if err != nil {
+		padData = []string{}
+	}
+
+	cursor := tree.Cursor()
+
+	for k, _, err := cursor.First(); err == nil; k, _, err = cursor.Next() {
+		if string(k) != "" {
+			padData = append(padData, string(k))
+		}
+	}
+
+	padList := binding.BindStringList(&padData)
+
+	padBox := widget.NewListWithData(padList,
+		func() fyne.CanvasObject {
+			c := container.NewVBox(
+				widget.NewLabel(""),
+			)
+			return c
+		},
+		func(di binding.DataItem, co fyne.CanvasObject) {
+			dat := di.(binding.String)
+			str, err := dat.Get()
+			if err != nil {
+				return
+			}
+
+			co.(*fyne.Container).Objects[0].(*widget.Label).SetText(str)
+			co.(*fyne.Container).Objects[0].(*widget.Label).Wrapping = fyne.TextWrapWord
+			co.(*fyne.Container).Objects[0].(*widget.Label).TextStyle.Bold = false
+			co.(*fyne.Container).Objects[0].(*widget.Label).Alignment = fyne.TextAlignLeading
+		})
+
+	padBox.OnSelected = func(id widget.ListItemID) {
+		session.Datapad = padData[id]
+		overlay := session.Window.Canvas().Overlays()
+		overlay.Add(
+			container.NewStack(
+				&iframe{},
+				canvas.NewRectangle(colors.DarkMatter),
 			),
-			layout.NewSpacer(),
-		),
-	)
+		)
+		overlay.Add(
+			container.NewStack(
+				&iframe{},
+				layoutPad(),
+			),
+		)
+		overlay.Top().Show()
+		padBox.UnselectAll()
+		padBox.Refresh()
+	}
 
-	scrollBox.SetMinSize(fyne.NewSize(300, 420))
+	shardForm := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(container.NewVBox(title, rectSpacer)),
+		rectSpacer,
+		rectSpacer,
+		container.NewStack(
+			rectListBox,
+			padBox,
+		),
+		rectSpacer,
+		entryNewPad,
+		rectSpacer,
+		btnAdd,
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+	)
 
 	gridItem1 := container.NewCenter(
-		container.NewVBox(
-			widget.NewLabel(""),
-			container.NewCenter(
-				res.rpc_header,
-				container.NewVBox(
-					title,
-					rectSpacer,
-				),
-			),
-			rectSpacer,
-			heading,
-			rectSpacer,
-			sub,
-			widget.NewLabel(""),
-			scrollBox,
-			rectSpacer,
-			rectSpacer,
-			btnCancel,
-			rectSpacer,
-			rectSpacer,
-			res.rpc_footer,
-		),
+		shardForm,
 	)
 
 	features := container.NewCenter(
@@ -4872,7 +8068,32 @@ func layoutAccount() fyne.CanvasObject {
 		layout.NewSpacer(),
 	)
 
-	subContainer := container.NewMax()
+	subContainer := container.NewStack(
+		container.NewVBox(
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
 
 	c := container.NewBorder(
 		features,
@@ -4881,9 +8102,1030 @@ func layoutAccount() fyne.CanvasObject {
 		nil,
 	)
 
-	layout := container.NewMax(
+	layout := container.NewStack(
 		frame,
 		c,
+	)
+
+	return layout
+}
+
+func layoutPad() fyne.CanvasObject {
+	resetResources()
+
+	rectWidth := canvas.NewRectangle(color.Transparent)
+	rectWidth.SetMinSize(fyne.NewSize(ui.MaxWidth, 10))
+
+	rectWidth90 := canvas.NewRectangle(color.Transparent)
+	rectWidth90.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+	rectEntry := canvas.NewRectangle(color.Transparent)
+	rectEntry.SetMinSize(fyne.NewSize(ui.Width, ui.Height*0.56))
+
+	heading := canvas.NewText(session.Datapad, colors.Green)
+	heading.TextSize = 20
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(6, 5))
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	selectOptions := widget.NewSelect([]string{"Clear", "Export (Plaintext)", "Delete"}, nil)
+	selectOptions.PlaceHolder = "Select an Option ..."
+
+	data, err := GetEncryptedValue("Datapads", []byte(session.Datapad))
+	if err != nil {
+		data = nil
+	}
+
+	overlay := session.Window.Canvas().Overlays()
+
+	btnSave := widget.NewButton("Save", nil)
+
+	entryPad := widget.NewEntry()
+	entryPad.Wrapping = fyne.TextWrapWord
+
+	selectOptions.OnChanged = func(s string) {
+		if s == "Clear" {
+			header := canvas.NewText("DATAPAD  RESET  REQUESTED", colors.Gray)
+			header.TextSize = 14
+			header.Alignment = fyne.TextAlignCenter
+			header.TextStyle = fyne.TextStyle{Bold: true}
+
+			subHeader := canvas.NewText("Clear Datapad?", colors.Account)
+			subHeader.TextSize = 22
+			subHeader.Alignment = fyne.TextAlignCenter
+			subHeader.TextStyle = fyne.TextStyle{Bold: true}
+
+			linkClose := widget.NewHyperlinkWithStyle("Cancel", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+			linkClose.OnTapped = func() {
+				overlay := session.Window.Canvas().Overlays()
+				overlay.Top().Hide()
+				overlay.Remove(overlay.Top())
+				overlay.Remove(overlay.Top())
+				selectOptions.Selected = "Select an Option ..."
+				selectOptions.Refresh()
+			}
+
+			btnSubmit := widget.NewButton("Clear", nil)
+
+			btnSubmit.OnTapped = func() {
+				if session.Datapad != "" {
+					err := StoreEncryptedValue("Datapads", []byte(session.Datapad), []byte(""))
+					if err != nil {
+						fmt.Printf("[Datapad] Err: %s\n", err)
+						selectOptions.Selected = "Select an Option ..."
+						selectOptions.Refresh()
+						return
+					}
+
+					selectOptions.Selected = "Select an Option ..."
+					selectOptions.Refresh()
+					entryPad.Text = ""
+					entryPad.Refresh()
+				}
+
+				overlay := session.Window.Canvas().Overlays()
+				overlay.Top().Hide()
+				overlay.Remove(overlay.Top())
+				overlay.Remove(overlay.Top())
+				selectOptions.Selected = "Select an Option ..."
+				selectOptions.Refresh()
+			}
+
+			span := canvas.NewRectangle(color.Transparent)
+			span.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					canvas.NewRectangle(colors.DarkMatter),
+				),
+			)
+
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					container.NewCenter(
+						container.NewVBox(
+							span,
+							container.NewCenter(
+								header,
+							),
+							rectSpacer,
+							rectSpacer,
+							subHeader,
+							widget.NewLabel(""),
+							btnSubmit,
+							rectSpacer,
+							rectSpacer,
+							container.NewHBox(
+								layout.NewSpacer(),
+								linkClose,
+								layout.NewSpacer(),
+							),
+							rectSpacer,
+							rectSpacer,
+						),
+					),
+				),
+			)
+		} else if s == "Export (Plaintext)" {
+			data := []byte(entryPad.Text)
+			err := os.WriteFile(AppPath()+string(filepath.Separator)+session.Datapad+".txt", data, 0644)
+			if err != nil {
+				fmt.Printf("[Datapad] Err: %s\n", err)
+				selectOptions.Selected = "Select an Option ..."
+				selectOptions.Refresh()
+				return
+			}
+
+			selectOptions.Selected = "Select an Option ..."
+			selectOptions.Refresh()
+		} else if s == "Delete" {
+			header := canvas.NewText("DATAPAD  DELETION  REQUESTED", colors.Gray)
+			header.TextSize = 14
+			header.Alignment = fyne.TextAlignCenter
+			header.TextStyle = fyne.TextStyle{Bold: true}
+
+			subHeader := canvas.NewText("Delete Datapad?", colors.Account)
+			subHeader.TextSize = 22
+			subHeader.Alignment = fyne.TextAlignCenter
+			subHeader.TextStyle = fyne.TextStyle{Bold: true}
+
+			linkClose := widget.NewHyperlinkWithStyle("Cancel", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+			linkClose.OnTapped = func() {
+				overlay := session.Window.Canvas().Overlays()
+				overlay.Top().Hide()
+				overlay.Remove(overlay.Top())
+				overlay.Remove(overlay.Top())
+				selectOptions.Selected = "Select an Option ..."
+				selectOptions.Refresh()
+			}
+
+			btnSubmit := widget.NewButton("Delete", nil)
+
+			btnSubmit.OnTapped = func() {
+				if session.Datapad != "" {
+					err := DeleteKey("Datapads", []byte(session.Datapad))
+					if err != nil {
+						fmt.Printf("[Datapad] Err: %s\n", err)
+						selectOptions.Selected = "Select an Option ..."
+						selectOptions.Refresh()
+						fmt.Printf("[Datapad] Error deleting %s: %s\n", session.Datapad, err)
+					} else {
+						session.Datapad = ""
+						session.DatapadChanged = false
+						removeOverlays()
+						session.Window.SetContent(layoutTransition())
+						session.Window.SetContent(layoutDatapad())
+					}
+				}
+			}
+
+			span := canvas.NewRectangle(color.Transparent)
+			span.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					canvas.NewRectangle(colors.DarkMatter),
+				),
+			)
+
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					container.NewCenter(
+						container.NewVBox(
+							span,
+							container.NewCenter(
+								header,
+							),
+							rectSpacer,
+							rectSpacer,
+							subHeader,
+							widget.NewLabel(""),
+							btnSubmit,
+							rectSpacer,
+							rectSpacer,
+							container.NewHBox(
+								layout.NewSpacer(),
+								linkClose,
+								layout.NewSpacer(),
+							),
+							rectSpacer,
+							rectSpacer,
+						),
+					),
+				),
+			)
+		} else {
+			session.Datapad = ""
+			session.DatapadChanged = false
+			overlay := session.Window.Canvas().Overlays()
+			overlay.Top().Hide()
+			overlay.Remove(overlay.Top())
+			overlay.Remove(overlay.Top())
+			selectOptions.Selected = "Select an Option ..."
+			selectOptions.Refresh()
+		}
+	}
+
+	btnSave.OnTapped = func() {
+		err = StoreEncryptedValue("Datapads", []byte(session.Datapad), []byte(entryPad.Text))
+		if err != nil {
+			btnSave.Text = "Error saving Datapad"
+			btnSave.Disable()
+			btnSave.Refresh()
+		} else {
+			session.DatapadChanged = false
+			btnSave.Text = "Save"
+			btnSave.Disable()
+			heading.Text = session.Datapad
+			heading.Refresh()
+		}
+	}
+
+	session.DatapadChanged = false
+
+	btnSave.Text = "Save"
+	btnSave.Disable()
+
+	entryPad.MultiLine = true
+	entryPad.Text = string(data)
+	entryPad.OnChanged = func(s string) {
+		session.DatapadChanged = true
+		heading.Text = session.Datapad + "*"
+		heading.Refresh()
+		btnSave.Text = "Save"
+		btnSave.Enable()
+	}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Datapad", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		if session.DatapadChanged {
+			header := canvas.NewText("DATAPAD  CHANGE  DETECTED", colors.Gray)
+			header.TextSize = 14
+			header.Alignment = fyne.TextAlignCenter
+			header.TextStyle = fyne.TextStyle{Bold: true}
+
+			subHeader := canvas.NewText("Save Datapad?", colors.Account)
+			subHeader.TextSize = 22
+			subHeader.Alignment = fyne.TextAlignCenter
+			subHeader.TextStyle = fyne.TextStyle{Bold: true}
+
+			linkClose := widget.NewHyperlinkWithStyle("Discard Changes", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+			linkClose.OnTapped = func() {
+				session.Datapad = ""
+				session.DatapadChanged = false
+				removeOverlays()
+			}
+
+			btnSubmit := widget.NewButton("Save", nil)
+
+			btnSubmit.OnTapped = func() {
+				err = StoreEncryptedValue("Datapads", []byte(session.Datapad), []byte(entryPad.Text))
+				if err != nil {
+					btnSave.Text = "Error saving Datapad"
+					btnSave.Disable()
+					btnSave.Refresh()
+				} else {
+					session.Datapad = ""
+					session.DatapadChanged = false
+					btnSave.Text = "Save"
+					removeOverlays()
+				}
+			}
+
+			span := canvas.NewRectangle(color.Transparent)
+			span.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					canvas.NewRectangle(colors.DarkMatter),
+				),
+			)
+
+			overlay.Add(
+				container.NewStack(
+					&iframe{},
+					container.NewCenter(
+						container.NewVBox(
+							span,
+							container.NewCenter(
+								header,
+							),
+							rectSpacer,
+							rectSpacer,
+							subHeader,
+							widget.NewLabel(""),
+							btnSubmit,
+							rectSpacer,
+							rectSpacer,
+							container.NewHBox(
+								layout.NewSpacer(),
+								linkClose,
+								layout.NewSpacer(),
+							),
+							rectSpacer,
+							rectSpacer,
+						),
+					),
+				),
+			)
+		} else {
+			session.Datapad = ""
+			session.DatapadChanged = false
+			overlay := session.Window.Canvas().Overlays()
+			overlay.Top().Hide()
+			overlay.Remove(overlay.Top())
+			overlay.Remove(overlay.Top())
+		}
+	}
+
+	top := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			heading,
+		),
+		rectSpacer,
+		container.NewCenter(
+			container.NewStack(
+				rectWidth90,
+				selectOptions,
+			),
+		),
+		rectSpacer,
+	)
+
+	center := container.NewStack(
+		rectWidth,
+		container.NewCenter(
+			container.NewVBox(
+				container.NewStack(
+					rectEntry,
+					entryPad,
+				),
+				rectSpacer,
+				btnSave,
+				rectSpacer,
+			),
+		),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			rectSpacer,
+			rectSpacer,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	layout := container.NewBorder(
+		top,
+		bottom,
+		nil,
+		center,
+	)
+
+	return layout
+}
+
+func layoutAccount() fyne.CanvasObject {
+	resetResources()
+
+	rectWidth := canvas.NewRectangle(color.Transparent)
+	rectWidth.SetMinSize(fyne.NewSize(ui.MaxWidth*0.99, 10))
+	rectWidth90 := canvas.NewRectangle(color.Transparent)
+	rectWidth90.SetMinSize(fyne.NewSize(ui.Width, 10))
+	rectBox := canvas.NewRectangle(color.Transparent)
+	rectBox.SetMinSize(fyne.NewSize(ui.MaxWidth*0.99, ui.MaxHeight*0.80))
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
+
+	title := canvas.NewText("M Y    A C C O U N T", colors.Gray)
+	title.TextStyle = fyne.TextStyle{Bold: true}
+	title.TextSize = 16
+
+	heading := canvas.NewText(engram.Disk.GetAddress().String()[0:5]+"..."+engram.Disk.GetAddress().String()[len(engram.Disk.GetAddress().String())-10:len(engram.Disk.GetAddress().String())], colors.Green)
+	heading.TextSize = 22
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelPassword := canvas.NewText("N E W    P A S S W O R D", colors.Gray)
+	labelPassword.TextStyle = fyne.TextStyle{Bold: true}
+	labelPassword.TextSize = 11
+	labelPassword.Alignment = fyne.TextAlignCenter
+
+	menuLabel := canvas.NewText("  M O R E    O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelRecovery := canvas.NewText("A C C O U N T    R E C O V E R Y", colors.Gray)
+	labelRecovery.TextSize = 11
+	labelRecovery.Alignment = fyne.TextAlignCenter
+	labelRecovery.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	sep2 := canvas.NewRectangle(colors.Gray)
+	sep2.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep2,
+		layout.NewSpacer(),
+	)
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Dashboard", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutDashboard())
+		removeOverlays()
+	}
+
+	linkCopyAddress := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkCopyAddress.OnTapped = func() {
+		session.Window.Clipboard().SetContent(engram.Disk.GetAddress().String())
+	}
+
+	btnClear := widget.NewButton("Delete Datashard", nil)
+	btnClear.OnTapped = func() {
+		header := canvas.NewText("DATASHARD  DELETION  REQUESTED", colors.Gray)
+		header.TextSize = 14
+		header.Alignment = fyne.TextAlignCenter
+		header.TextStyle = fyne.TextStyle{Bold: true}
+
+		subHeader := canvas.NewText("Are you sure?", colors.Account)
+		subHeader.TextSize = 22
+		subHeader.Alignment = fyne.TextAlignCenter
+		subHeader.TextStyle = fyne.TextStyle{Bold: true}
+
+		linkClose := widget.NewHyperlinkWithStyle("Cancel", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+		linkClose.OnTapped = func() {
+			session.Datapad = ""
+			session.DatapadChanged = false
+			removeOverlays()
+		}
+
+		btnSubmit := widget.NewButton("Delete Datashard", nil)
+
+		btnSubmit.OnTapped = func() {
+			err := cleanWalletData()
+			if err != nil {
+				btnSubmit.Text = "Error deleting datashard"
+				btnSubmit.Disable()
+				btnSubmit.Refresh()
+			} else {
+				btnSubmit.Text = "Deletion successful!"
+				btnSubmit.Disable()
+				btnSubmit.Refresh()
+				removeOverlays()
+			}
+		}
+
+		span := canvas.NewRectangle(color.Transparent)
+		span.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+		overlay := session.Window.Canvas().Overlays()
+
+		overlay.Add(
+			container.NewStack(
+				&iframe{},
+				canvas.NewRectangle(colors.DarkMatter),
+			),
+		)
+
+		overlay.Add(
+			container.NewStack(
+				&iframe{},
+				container.NewCenter(
+					container.NewVBox(
+						span,
+						container.NewCenter(
+							header,
+						),
+						rectSpacer,
+						rectSpacer,
+						subHeader,
+						widget.NewLabel(""),
+						btnSubmit,
+						rectSpacer,
+						rectSpacer,
+						container.NewHBox(
+							layout.NewSpacer(),
+							linkClose,
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+					),
+				),
+			),
+		)
+	}
+
+	btnSeed := widget.NewButton("Access Recovery Words", nil)
+	btnSeed.OnTapped = func() {
+		overlay := session.Window.Canvas().Overlays()
+
+		header := canvas.NewText("ACCOUNT  VERIFICATION  REQUIRED", colors.Gray)
+		header.TextSize = 14
+		header.Alignment = fyne.TextAlignCenter
+		header.TextStyle = fyne.TextStyle{Bold: true}
+
+		subHeader := canvas.NewText("Confirm Password", colors.Account)
+		subHeader.TextSize = 22
+		subHeader.Alignment = fyne.TextAlignCenter
+		subHeader.TextStyle = fyne.TextStyle{Bold: true}
+
+		linkClose := widget.NewHyperlinkWithStyle("Cancel", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+		linkClose.OnTapped = func() {
+			overlay := session.Window.Canvas().Overlays()
+			overlay.Top().Hide()
+			overlay.Remove(overlay.Top())
+			overlay.Remove(overlay.Top())
+		}
+
+		btnSubmit := widget.NewButton("Submit", nil)
+
+		entryPassword := widget.NewEntry()
+		entryPassword.Password = true
+		entryPassword.PlaceHolder = "Password"
+		entryPassword.OnChanged = func(s string) {
+			if s == "" {
+				btnSubmit.Text = "Submit"
+				btnSubmit.Disable()
+				btnSubmit.Refresh()
+			} else {
+				btnSubmit.Text = "Submit"
+				btnSubmit.Enable()
+				btnSubmit.Refresh()
+			}
+		}
+
+		btnSubmit.OnTapped = func() {
+			if engram.Disk.Check_Password(entryPassword.Text) {
+				overlay.Add(
+					container.NewStack(
+						&iframe{},
+						canvas.NewRectangle(colors.DarkMatter),
+					),
+				)
+
+				overlay.Add(
+					layoutRecovery(),
+				)
+			} else {
+				btnSubmit.Text = "Invalid Password..."
+				btnSubmit.Disable()
+				btnSubmit.Refresh()
+			}
+		}
+
+		btnSubmit.Disable()
+
+		span := canvas.NewRectangle(color.Transparent)
+		span.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+		overlay.Add(
+			container.NewStack(
+				&iframe{},
+				canvas.NewRectangle(colors.DarkMatter),
+			),
+		)
+
+		overlay.Add(
+			container.NewStack(
+				&iframe{},
+				container.NewCenter(
+					container.NewVBox(
+						span,
+						container.NewCenter(
+							header,
+						),
+						rectSpacer,
+						rectSpacer,
+						subHeader,
+						widget.NewLabel(""),
+						container.NewCenter(
+							container.NewStack(
+								span,
+								entryPassword,
+							),
+						),
+						rectSpacer,
+						rectSpacer,
+						btnSubmit,
+						rectSpacer,
+						rectSpacer,
+						container.NewHBox(
+							layout.NewSpacer(),
+							linkClose,
+							layout.NewSpacer(),
+						),
+						rectSpacer,
+						rectSpacer,
+					),
+				),
+			),
+		)
+	}
+
+	btnChange := widget.NewButton("Submit", nil)
+	btnChange.Disable()
+
+	curPass := widget.NewEntry()
+	curPass.Password = true
+	curPass.PlaceHolder = "Current Password"
+	curPass.OnChanged = func(s string) {
+		btnChange.Text = "Submit"
+		btnChange.Enable()
+		btnChange.Refresh()
+	}
+
+	newPass := widget.NewEntry()
+	newPass.Password = true
+	newPass.PlaceHolder = "New Password"
+	newPass.OnChanged = func(s string) {
+		btnChange.Text = "Submit"
+		btnChange.Enable()
+		btnChange.Refresh()
+	}
+
+	confirm := widget.NewEntry()
+	confirm.Password = true
+	confirm.PlaceHolder = "Confirm Password"
+	confirm.OnChanged = func(s string) {
+		btnChange.Text = "Submit"
+		btnChange.Enable()
+		btnChange.Refresh()
+	}
+
+	btnChange.OnTapped = func() {
+		if engram.Disk.Check_Password(curPass.Text) {
+			if newPass.Text == confirm.Text && newPass.Text != "" {
+				err := engram.Disk.Set_Encrypted_Wallet_Password(newPass.Text)
+				if err != nil {
+					btnChange.Text = "Error changing password"
+					btnChange.Disable()
+					btnChange.Refresh()
+				} else {
+					curPass.Text = ""
+					curPass.Refresh()
+					newPass.Text = ""
+					newPass.Refresh()
+					confirm.Text = ""
+					confirm.Refresh()
+					btnChange.Text = "Password Updated"
+					btnChange.Disable()
+					btnChange.Refresh()
+					engram.Disk.Save_Wallet()
+				}
+			} else {
+				btnChange.Text = "Passwords do not match"
+				btnChange.Disable()
+				btnChange.Refresh()
+			}
+		} else {
+			btnChange.Text = "Incorrect password entered"
+			btnChange.Disable()
+			btnChange.Refresh()
+		}
+	}
+
+	form := container.NewStack(
+		rectWidth,
+		container.NewHBox(
+			layout.NewSpacer(),
+			container.NewVBox(
+				curPass,
+				rectWidth90,
+				newPass,
+				confirm,
+				rectSpacer,
+				btnChange,
+			),
+			layout.NewSpacer(),
+		),
+	)
+
+	features := container.NewStack(
+		rectBox,
+		container.NewVScroll(
+			container.NewVBox(
+				rectSpacer,
+				rectSpacer,
+				container.NewCenter(
+					container.NewVBox(
+						title,
+						rectSpacer,
+					),
+				),
+				rectSpacer,
+				heading,
+				container.NewHBox(
+					layout.NewSpacer(),
+					linkCopyAddress,
+					layout.NewSpacer(),
+				),
+				rectSpacer,
+				rectSpacer,
+				container.NewStack(
+					container.NewHBox(
+						layout.NewSpacer(),
+						container.NewStack(
+							rectWidth90,
+							btnClear,
+						),
+						layout.NewSpacer(),
+					),
+				),
+				widget.NewLabel(""),
+				container.NewStack(
+					container.NewHBox(
+						layout.NewSpacer(),
+						line1,
+						layout.NewSpacer(),
+						labelRecovery,
+						layout.NewSpacer(),
+						line2,
+						layout.NewSpacer(),
+					),
+				),
+				widget.NewLabel(""),
+				container.NewStack(
+					container.NewHBox(
+						layout.NewSpacer(),
+						container.NewStack(
+							rectWidth90,
+							btnSeed,
+						),
+						layout.NewSpacer(),
+					),
+				),
+				widget.NewLabel(""),
+				container.NewStack(
+					container.NewHBox(
+						layout.NewSpacer(),
+						line1,
+						layout.NewSpacer(),
+						labelPassword,
+						layout.NewSpacer(),
+						line2,
+						layout.NewSpacer(),
+					),
+				),
+				widget.NewLabel(""),
+				form,
+			),
+		),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	layout := container.NewBorder(
+		features,
+		bottom,
+		nil,
+		nil,
+	)
+
+	return layout
+}
+
+func layoutRecovery() fyne.CanvasObject {
+	wSpacer := widget.NewLabel(" ")
+	heading := canvas.NewText("Recovery Words", colors.Green)
+	heading.TextSize = 22
+	heading.Alignment = fyne.TextAlignCenter
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	rectStatus := canvas.NewRectangle(color.Transparent)
+	rectStatus.SetMinSize(fyne.NewSize(10, 10))
+
+	rectHeader := canvas.NewRectangle(color.Transparent)
+	rectHeader.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+	linkCancel := widget.NewHyperlinkWithStyle("Back to My Account", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkCancel.OnTapped = func() {
+		removeOverlays()
+	}
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(ui.Width, 5))
+
+	grid := container.NewVBox()
+	grid.Objects = nil
+
+	header := container.NewVBox(
+		rectSpacer,
+		rectSpacer,
+		heading,
+		rectSpacer,
+		rectSpacer,
+	)
+
+	footer := container.NewVBox(
+		wSpacer,
+		container.NewHBox(
+			layout.NewSpacer(),
+			linkCancel,
+			layout.NewSpacer(),
+		),
+		wSpacer,
+	)
+
+	body := widget.NewLabel("Please save the following 25 recovery words in a safe place. Never share them with anyone.")
+	body.Wrapping = fyne.TextWrapWord
+	body.Alignment = fyne.TextAlignCenter
+	body.TextStyle = fyne.TextStyle{Bold: true}
+
+	btnCopySeed := widget.NewButton("Copy Recovery Words", nil)
+
+	form := container.NewVBox(
+		container.NewHBox(
+			layout.NewSpacer(),
+			container.NewStack(
+				rectHeader,
+				body,
+			),
+			layout.NewSpacer(),
+		),
+		wSpacer,
+		container.NewCenter(grid),
+		rectSpacer,
+		rectSpacer,
+		container.NewHBox(
+			layout.NewSpacer(),
+			container.NewStack(
+				rectHeader,
+				btnCopySeed,
+			),
+			layout.NewSpacer(),
+		),
+		rectSpacer,
+	)
+
+	scrollBox := container.NewVScroll(
+		container.NewStack(
+			form,
+		),
+	)
+	scrollBox.SetMinSize(fyne.NewSize(ui.MaxWidth, ui.Height*0.74))
+
+	formatted := strings.Split(engram.Disk.GetSeed(), " ")
+
+	rect := canvas.NewRectangle(color.RGBA{19, 25, 34, 255})
+	rect.SetMinSize(fyne.NewSize(ui.Width, 25))
+
+	for i := 0; i < len(formatted); i++ {
+		pos := fmt.Sprintf("%d", i+1)
+		word := strings.ReplaceAll(formatted[i], " ", "")
+		grid.Add(container.NewStack(
+			rect,
+			container.NewHBox(
+				widget.NewLabel(" "),
+				widget.NewLabelWithStyle(pos, fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+				layout.NewSpacer(),
+				widget.NewLabelWithStyle(word, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+				widget.NewLabel(" "),
+			),
+		),
+		)
+	}
+
+	btnCopySeed.OnTapped = func() {
+		session.Window.Clipboard().SetContent(engram.Disk.GetSeed())
+	}
+
+	layout := container.NewBorder(
+		container.NewHBox(
+			layout.NewSpacer(),
+			container.NewVBox(
+				header,
+				scrollBox,
+			),
+			layout.NewSpacer(),
+		),
+		footer,
+		nil,
+		nil,
+	)
+
+	return layout
+}
+
+func layoutFrame() fyne.CanvasObject {
+	entry := widget.NewEntry()
+	layout := container.NewStack(entry)
+
+	resizeWindow(ui.MaxWidth, ui.MaxHeight)
+	session.Window.SetContent(layout)
+	session.Window.SetFixedSize(false)
+
+	go func() {
+		time.Sleep(time.Second * 2)
+		removeOverlays()
+
+		ui.MaxWidth = entry.Size().Width
+		ui.MaxHeight = entry.Size().Height
+
+		ui.Width = ui.MaxWidth * 0.9
+		ui.Height = ui.MaxHeight
+		ui.Padding = ui.MaxWidth * 0.05
+
+		resizeWindow(ui.MaxWidth, ui.MaxHeight)
+		session.Window.SetContent(layoutTransition())
+		session.Window.SetContent(layoutMain())
+	}()
+
+	overlays := session.Window.Canvas().Overlays()
+	overlays.Add(
+		container.NewStack(
+			canvas.NewRectangle(colors.DarkMatter),
+		),
 	)
 
 	return layout
