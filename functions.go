@@ -136,7 +136,7 @@ type Session struct {
 	NewUser           string
 	Gif               *x.AnimatedGif
 	RegHashes         int64
-	LimitMessages     uint64
+	LimitMessages     bool
 	TrackRecentBlocks int64
 }
 
@@ -540,6 +540,8 @@ func closeWallet() {
 		engram.Disk.Close_Encrypted_Wallet()
 		session.WalletOpen = false
 		session.Domain = "app.main"
+		session.BalanceUSD = ""
+		session.LastBalance = 0
 		engram.Disk = nil
 		tx = Transfers{}
 
@@ -666,16 +668,14 @@ func login() {
 	}
 
 	session.WalletOpen = true
+	session.BalanceUSD = ""
+	session.LastBalance = 0
 
 	if !session.Offline {
 		walletapi.SetDaemonAddress(session.Daemon)
 		engram.Disk.SetDaemonAddress(session.Daemon)
 
 		if session.TrackRecentBlocks > 0 {
-			if int64(session.LimitMessages) > session.TrackRecentBlocks {
-				session.LimitMessages = uint64(session.TrackRecentBlocks)
-			}
-
 			fmt.Printf("[Engram] Scan tracking enabled, only scanning the last %d blocks...\n", session.TrackRecentBlocks)
 			engram.Disk.SetTrackRecentBlocks(session.TrackRecentBlocks)
 		}
@@ -756,11 +756,7 @@ func login() {
 	address := engram.Disk.GetAddress().String()
 	shard := fmt.Sprintf("%x", sha1.Sum([]byte(address)))
 	session.ID = shard
-
-	// Set a soft limit on transaction history (TODO: make it user-defined?)
-	if int(engram.Disk.Get_Height()) > 1000000 {
-		session.LimitMessages = uint64(int(engram.Disk.Get_Height()) - 1000000)
-	}
+	session.LimitMessages = true
 }
 
 // Remove all overlays
@@ -773,6 +769,7 @@ func removeOverlays() {
 	}
 
 	if res.loading != nil {
+		res.loading.Hide()
 		res.loading.Stop()
 		res.loading = nil
 	}

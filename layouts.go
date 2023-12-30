@@ -49,9 +49,7 @@ import (
 func layoutMain() fyne.CanvasObject {
 	// Set theme
 	a.Settings().SetTheme(themes.main)
-	// Reset UI resources
-	resetResources()
-	initSettings()
+	//initSettings()
 	session.Domain = "app.main"
 	session.Path = ""
 	session.Password = ""
@@ -337,8 +335,6 @@ func layoutMain() fyne.CanvasObject {
 
 func layoutDashboard() fyne.CanvasObject {
 	resizeWindow(ui.MaxWidth, ui.MaxHeight)
-	// Reset UI resources
-	resetResources()
 
 	session.Dashboard = "main"
 	session.Domain = "app.wallet"
@@ -668,8 +664,6 @@ func layoutDashboard() fyne.CanvasObject {
 }
 
 func layoutSend() fyne.CanvasObject {
-	// Reset UI resources
-	resetResources()
 	session.Domain = "app.send"
 
 	wSpacer := widget.NewLabel(" ")
@@ -678,13 +672,42 @@ func layoutSend() fyne.CanvasObject {
 	btnSend := widget.NewButton("Save", nil)
 
 	wAmount := widget.NewEntry()
+	wAmount.SetPlaceHolder("Amount")
+
 	wMessage := widget.NewEntry()
+	wMessage.SetValidationError(nil)
+	wMessage.SetPlaceHolder("Message")
+	wMessage.Validator = func(s string) error {
+		bytes := []byte(s)
+		if len(bytes) <= 130 {
+			tx.Comment = s
+			wMessage.SetValidationError(nil)
+			return nil
+		} else {
+			err := errors.New("Message too long")
+			wMessage.SetValidationError(err)
+			return err
+		}
+	}
+
 	wPaymentID := widget.NewEntry()
+	wPaymentID.Validator = func(s string) (err error) {
+		tx.PaymentID, err = strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			wPaymentID.SetValidationError(err)
+			tx.PaymentID = 0
+		}
+
+		return
+	}
+	wPaymentID.SetPlaceHolder("Payment ID / Service Port")
 
 	options := []string{"Anonymity Set:   2  (None)", "Anonymity Set:   4  (Low)", "Anonymity Set:   8  (Low)", "Anonymity Set:   16  (Recommended)", "Anonymity Set:   32  (Medium)", "Anonymity Set:   64  (High)", "Anonymity Set:   128  (High)"}
 	wRings := widget.NewSelect(options, nil)
 
 	wReceiver := widget.NewEntry()
+	wReceiver.SetPlaceHolder("Receiver username or address")
+	wReceiver.SetValidationError(nil)
 	wReceiver.Validator = func(s string) error {
 		address, err := globals.ParseValidateAddress(s)
 		if err != nil {
@@ -764,20 +787,6 @@ func layoutSend() fyne.CanvasObject {
 		return nil
 	}
 
-	wReceiver.SetPlaceHolder("Receiver username or address")
-	wReceiver.SetValidationError(nil)
-
-	wAmount.SetPlaceHolder("Amount")
-
-	wMessage.SetPlaceHolder("Message")
-	wMessage.OnChanged = func(s string) {
-		bytes := []byte(s)
-		if len(bytes) <= 130 {
-			tx.Comment = s
-		}
-		wMessage.SetText(tx.Comment)
-	}
-
 	/*
 		wAll := widget.NewCheck(" All", func(b bool) {
 			if b {
@@ -822,18 +831,9 @@ func layoutSend() fyne.CanvasObject {
 
 	wAmount.SetValidationError(nil)
 
-	var err error
-
-	wPaymentID.OnChanged = func(s string) {
-		tx.PaymentID, err = strconv.ParseUint(s, 10, 64)
-		if err != nil {
-			tx.PaymentID = 0
-		}
-	}
-	wPaymentID.SetPlaceHolder("Payment ID / Service Port")
-
 	wRings.PlaceHolder = "(Select Anonymity Set)"
 	wRings.OnChanged = func(s string) {
+		var err error
 		regex := regexp.MustCompile("[0-9]+")
 		result := regex.FindAllString(s, -1)
 		tx.Ringsize, err = strconv.ParseUint(result[0], 10, 64)
@@ -984,7 +984,6 @@ func layoutSend() fyne.CanvasObject {
 }
 
 func layoutServiceAddress() fyne.CanvasObject {
-	resetResources()
 	session.Domain = "app.service"
 
 	wSpacer := widget.NewLabel(" ")
@@ -1008,12 +1007,16 @@ func layoutServiceAddress() fyne.CanvasObject {
 
 	wMessage := widget.NewEntry()
 	wMessage.SetPlaceHolder("Message")
-	wMessage.OnChanged = func(s string) {
+	wMessage.Validator = func(s string) (err error) {
 		bytes := []byte(s)
 		if len(bytes) <= 130 {
 			tx.Comment = s
+		} else {
+			err = errors.New("Message too long")
+			wMessage.SetValidationError(err)
 		}
-		wMessage.SetText(tx.Comment)
+
+		return
 	}
 
 	wAmount.Validator = func(s string) error {
@@ -1040,16 +1043,22 @@ func layoutServiceAddress() fyne.CanvasObject {
 
 	wAmount.SetValidationError(nil)
 
-	var err error
-
-	wPaymentID.OnChanged = func(s string) {
+	wPaymentID.Validator = func(s string) (err error) {
 		tx.PaymentID, err = strconv.ParseUint(s, 10, 64)
 		if err != nil {
 			tx.PaymentID = 0
 			btnCreate.Disable()
+			wPaymentID.SetValidationError(err)
+			return
 		} else {
 			if wReceiver.Text != "" {
 				btnCreate.Enable()
+				wPaymentID.SetValidationError(nil)
+				return
+			} else {
+				err = errors.New("Empty Payment ID")
+				wPaymentID.SetValidationError(err)
+				return
 			}
 		}
 	}
@@ -1301,7 +1310,6 @@ func layoutLoading() fyne.CanvasObject {
 func layoutNewAccount() fyne.CanvasObject {
 	resizeWindow(ui.MaxWidth, ui.MaxHeight)
 	a.Settings().SetTheme(themes.alt)
-	resetResources()
 
 	session.Domain = "app.register"
 	session.Language = -1
@@ -1608,7 +1616,6 @@ func layoutNewAccount() fyne.CanvasObject {
 func layoutRestore() fyne.CanvasObject {
 	resizeWindow(ui.MaxWidth, ui.MaxHeight)
 	a.Settings().SetTheme(themes.main)
-	resetResources()
 
 	session.Domain = "app.restore"
 	session.Language = -1
@@ -1752,9 +1759,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 		return nil
 	}
-	wAccount.OnChanged = func(s string) {
-		wAccount.Validate()
-	}
 
 	wSpacer := widget.NewLabel(" ")
 	heading := canvas.NewText("Recover Account", colors.Green)
@@ -1772,8 +1776,6 @@ func layoutRestore() fyne.CanvasObject {
 
 	rectHeader := canvas.NewRectangle(color.Transparent)
 	rectHeader.SetMinSize(fyne.NewSize(ui.Width, 10))
-
-	//frame := &iframe{}
 
 	rectSpacer := canvas.NewRectangle(color.Transparent)
 	rectSpacer.SetMinSize(fyne.NewSize(ui.Width, 5))
@@ -1794,9 +1796,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 		seed[0] = s
 		return nil
-	}
-	word1.OnChanged = func(s string) {
-		word1.Validate()
 	}
 	word1.OnFocusGained = func() {
 		offset := word1.Position().Y
@@ -1828,9 +1827,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word2.OnChanged = func(s string) {
-		word2.Validate()
-	}
 	word2.OnFocusGained = func() {
 		offset := word2.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -1860,9 +1856,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	word3.OnChanged = func(s string) {
-		word3.Validate()
 	}
 	word3.OnFocusGained = func() {
 		offset := word3.Position().Y
@@ -1894,9 +1887,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word4.OnChanged = func(s string) {
-		word4.Validate()
-	}
 	word4.OnFocusGained = func() {
 		offset := word4.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -1927,9 +1917,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word5.OnChanged = func(s string) {
-		word5.Validate()
-	}
 	word5.OnFocusGained = func() {
 		offset := word5.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -1959,9 +1946,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	word6.OnChanged = func(s string) {
-		word6.Validate()
 	}
 	word6.OnFocusGained = func() {
 		offset := word6.Position().Y
@@ -1996,9 +1980,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word7.OnChanged = func(s string) {
-		word7.Validate()
-	}
 	word7.OnFocusGained = func() {
 		offset := word7.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2032,9 +2013,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word8.OnChanged = func(s string) {
-		word8.Validate()
-	}
 	word8.OnFocusGained = func() {
 		offset := word8.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2064,9 +2042,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	word9.OnChanged = func(s string) {
-		word9.Validate()
 	}
 	word9.OnFocusGained = func() {
 		offset := word9.Position().Y
@@ -2098,9 +2073,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word10.OnChanged = func(s string) {
-		word10.Validate()
-	}
 	word10.OnFocusGained = func() {
 		offset := word10.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2130,9 +2102,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	word11.OnChanged = func(s string) {
-		word11.Validate()
 	}
 	word11.OnFocusGained = func() {
 		offset := word11.Position().Y
@@ -2164,9 +2133,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word12.OnChanged = func(s string) {
-		word12.Validate()
-	}
 	word12.OnFocusGained = func() {
 		offset := word12.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2196,9 +2162,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	word13.OnChanged = func(s string) {
-		word13.Validate()
 	}
 	word13.OnFocusGained = func() {
 		offset := word13.Position().Y
@@ -2230,9 +2193,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word14.OnChanged = func(s string) {
-		word14.Validate()
-	}
 	word14.OnFocusGained = func() {
 		offset := word14.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2262,9 +2222,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	word15.OnChanged = func(s string) {
-		word15.Validate()
 	}
 	word15.OnFocusGained = func() {
 		offset := word15.Position().Y
@@ -2296,9 +2253,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word16.OnChanged = func(s string) {
-		word16.Validate()
-	}
 	word16.OnFocusGained = func() {
 		offset := word16.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2328,9 +2282,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	word17.OnChanged = func(s string) {
-		word17.Validate()
 	}
 	word17.OnFocusGained = func() {
 		offset := word17.Position().Y
@@ -2362,9 +2313,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word18.OnChanged = func(s string) {
-		word18.Validate()
-	}
 	word18.OnFocusGained = func() {
 		offset := word18.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2395,9 +2343,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word19.OnChanged = func(s string) {
-		word19.Validate()
-	}
 	word19.OnFocusGained = func() {
 		offset := word19.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2415,9 +2360,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 		seed[19] = s
 		return nil
-	}
-	word20.OnChanged = func(s string) {
-		word20.Validate()
 	}
 	word20.OnFocusGained = func() {
 		offset := word20.Position().Y
@@ -2449,9 +2391,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word21.OnChanged = func(s string) {
-		word21.Validate()
-	}
 	word21.OnFocusGained = func() {
 		offset := word21.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2481,9 +2420,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	word22.OnChanged = func(s string) {
-		word22.Validate()
 	}
 	word22.OnFocusGained = func() {
 		offset := word22.Position().Y
@@ -2515,9 +2451,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word23.OnChanged = func(s string) {
-		word23.Validate()
-	}
 	word23.OnFocusGained = func() {
 		offset := word23.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2548,9 +2481,6 @@ func layoutRestore() fyne.CanvasObject {
 
 		return nil
 	}
-	word24.OnChanged = func(s string) {
-		word24.Validate()
-	}
 	word24.OnFocusGained = func() {
 		offset := word24.Position().Y
 		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
@@ -2580,9 +2510,6 @@ func layoutRestore() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	word25.OnChanged = func(s string) {
-		word25.Validate()
 	}
 	word25.OnFocusGained = func() {
 		offset := word25.Position().Y
@@ -2813,7 +2740,6 @@ func layoutRestore() fyne.CanvasObject {
 
 func layoutAssetExplorer() fyne.CanvasObject {
 	session.Domain = "app.explorer"
-	resetResources()
 	var data []string
 	var listData binding.StringList
 	var listBox *widget.List
@@ -3033,6 +2959,9 @@ func layoutAssetExplorer() fyne.CanvasObject {
 	go func() {
 		if engram.Disk != nil && gnomon.Index != nil {
 			for gnomon.Index.LastIndexedHeight < int64(engram.Disk.Get_Daemon_Height()) {
+				if session.Domain != "app.explorer" {
+					break
+				}
 				results.Text = fmt.Sprintf("  Gnomon is syncing... [%d / %d]", gnomon.Index.LastIndexedHeight, int64(engram.Disk.Get_Daemon_Height()))
 				results.Color = colors.Yellow
 				results.Refresh()
@@ -3181,7 +3110,6 @@ func layoutAssetExplorer() fyne.CanvasObject {
 }
 
 func layoutMyAssets() fyne.CanvasObject {
-	resetResources()
 	var data []string
 	var listData binding.StringList
 	var listBox *widget.List
@@ -3616,7 +3544,6 @@ func layoutMyAssets() fyne.CanvasObject {
 }
 
 func layoutAssetManager(scid string) fyne.CanvasObject {
-	resetResources()
 
 	session.Domain = "app.manager"
 
@@ -4168,6 +4095,10 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 						}
 					}
 
+					btnExecute.Text = "Executing..."
+					btnExecute.Disable()
+					btnExecute.Refresh()
+
 					err = executeContractFunction(hash, dero_amount, asset_amount, funcName.Text, funcType, params)
 					if err != nil {
 						btnExecute.Text = "Error executing function..."
@@ -4326,7 +4257,6 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 }
 
 func layoutTransfers() fyne.CanvasObject {
-	resetResources()
 	session.Domain = "app.transfers"
 
 	wSpacer := widget.NewLabel(" ")
@@ -4432,7 +4362,7 @@ func layoutTransfers() fyne.CanvasObject {
 		session.Window.SetContent(layoutTransfersDetail(id))
 	}
 
-	btnSend := widget.NewButton("Send All", nil)
+	btnSend := widget.NewButton("Send Transfers", nil)
 
 	btnClear := widget.NewButton("Clear", func() {
 		pendingList = pendingList[:0]
@@ -4503,7 +4433,7 @@ func layoutTransfers() fyne.CanvasObject {
 					btnSend.Refresh()
 					txid, err := sendTransfers()
 					if err != nil {
-						btnSend.Text = "Send All"
+						btnSend.Text = "Send Transfers"
 						btnSend.Enable()
 						btnSend.Refresh()
 						return
@@ -4692,8 +4622,6 @@ func layoutTransfers() fyne.CanvasObject {
 }
 
 func layoutTransfersDetail(index int) fyne.CanvasObject {
-	resetResources()
-
 	wSpacer := widget.NewLabel(" ")
 
 	rectWidth := canvas.NewRectangle(color.Transparent)
@@ -4970,9 +4898,7 @@ func layoutTransition() fyne.CanvasObject {
 }
 
 func layoutSettings() fyne.CanvasObject {
-	resetResources()
 	stopGnomon()
-
 	rect := canvas.NewRectangle(color.Transparent)
 	rect.SetMinSize(fyne.NewSize(ui.Width, 10))
 	rectScroll := canvas.NewRectangle(color.Transparent)
@@ -5288,7 +5214,6 @@ func layoutSettings() fyne.CanvasObject {
 }
 
 func layoutMessages() fyne.CanvasObject {
-	resetResources()
 	session.Domain = "app.messages"
 
 	if !walletapi.Connected {
@@ -5312,21 +5237,19 @@ func layoutMessages() fyne.CanvasObject {
 	checkLimit := widget.NewCheck(" Show only recent messages", nil)
 	checkLimit.OnChanged = func(b bool) {
 		if b {
-			if int(engram.Disk.Get_Height()) > 1000000 {
-				session.LimitMessages = uint64(int(engram.Disk.Get_Height()) - 1000000)
-				session.Window.SetContent(layoutTransition())
-				session.Window.SetContent(layoutMessages())
-				removeOverlays()
-			}
+			session.LimitMessages = true
+			session.Window.SetContent(layoutTransition())
+			session.Window.SetContent(layoutMessages())
+			removeOverlays()
 		} else {
-			session.LimitMessages = 0
+			session.LimitMessages = false
 			session.Window.SetContent(layoutTransition())
 			session.Window.SetContent(layoutMessages())
 			removeOverlays()
 		}
 	}
 
-	if session.LimitMessages != uint64(0) {
+	if session.LimitMessages {
 		checkLimit.Checked = true
 	}
 
@@ -5373,7 +5296,15 @@ func layoutMessages() fyne.CanvasObject {
 
 	messages.Data = nil
 
-	data := getMessages(engram.Disk.Get_Height() - session.LimitMessages)
+	var height uint64
+
+	if session.LimitMessages {
+		height = engram.Disk.Get_Height() - 1000000
+	} else {
+		height = 0
+	}
+
+	data := getMessages(height)
 	temp := data
 
 	list := binding.BindStringList(&data)
@@ -5494,30 +5425,6 @@ func layoutMessages() fyne.CanvasObject {
 		return errors.New("Invalid username or address")
 	}
 
-	entryDest.OnChanged = func(s string) {
-		entryDest.Validate()
-	}
-
-	/*
-		entryDest.OnFocusGained = func() {
-			if fyne.CurrentDevice().IsMobile() {
-				rectListBox.SetMinSize(fyne.NewSize(ui.Width, 170))
-				rectListBox.Resize(fyne.NewSize(ui.Width, 170))
-				rectListBox.Refresh()
-				session.Window.Canvas().Content().Refresh()
-			}
-		}
-
-		entryDest.OnFocusLost = func() {
-			if fyne.CurrentDevice().IsMobile() {
-				rectListBox.SetMinSize(fyne.NewSize(ui.Width, 270))
-				rectListBox.Resize(fyne.NewSize(ui.Width, 270))
-				rectListBox.Refresh()
-				session.Window.Canvas().Content().Refresh()
-			}
-		}
-	*/
-
 	messageForm := container.NewVBox(
 		rectSpacer,
 		rectSpacer,
@@ -5630,7 +5537,6 @@ func layoutMessages() fyne.CanvasObject {
 }
 
 func layoutPM() fyne.CanvasObject {
-	resetResources()
 	session.Domain = "app.messages.contact"
 
 	if !walletapi.Connected {
@@ -5652,7 +5558,6 @@ func layoutPM() fyne.CanvasObject {
 		contactAddress = "..." + short
 	}
 
-	//wSpacer := widget.NewLabel(" ")
 	title := canvas.NewText("M E S S A G E S", colors.Gray)
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.TextSize = 16
@@ -5734,8 +5639,16 @@ func layoutPM() fyne.CanvasObject {
 	)
 
 	var e *fyne.Container
+	var height uint64
 
-	data := getMessagesFromUser(messages.Contact, engram.Disk.Get_Height()-session.LimitMessages)
+	if session.LimitMessages {
+		height = engram.Disk.Get_Height() - 1000000
+	} else {
+		height = 0
+	}
+
+	data := getMessagesFromUser(messages.Contact, height)
+
 	for d := range data {
 		if data[d].Incoming {
 			if data[d].Payload_RPC.Has(rpc.RPC_NEEDS_REPLYBACK_ADDRESS, rpc.DataString) {
@@ -5916,28 +5829,6 @@ func layoutPM() fyne.CanvasObject {
 		}
 	}
 
-	/*
-		entry.OnFocusGained = func() {
-			if fyne.CurrentDevice().IsMobile() {
-				subframe.SetMinSize(fyne.NewSize(ui.Width, 165))
-				subframe.Resize(fyne.NewSize(ui.Width, 165))
-				subframe.Refresh()
-				session.Window.Canvas().Content().Refresh()
-			}
-			entry.CursorRow = 0
-			entry.CursorColumn = 0
-		}
-
-		entry.OnFocusLost = func() {
-			if fyne.CurrentDevice().IsMobile() {
-				subframe.SetMinSize(fyne.NewSize(ui.Width, 270))
-				subframe.Resize(fyne.NewSize(ui.Width, 270))
-				subframe.Refresh()
-				session.Window.Canvas().Content().Refresh()
-			}
-		}
-	*/
-
 	btnSend.OnTapped = func() {
 		if messages.Message == "" {
 			return
@@ -6107,7 +5998,6 @@ func layoutPM() fyne.CanvasObject {
 }
 
 func layoutCyberdeck() fyne.CanvasObject {
-	resetResources()
 	session.Domain = "app.cyberdeck"
 	wSpacer := widget.NewLabel(" ")
 	title := canvas.NewText("C Y B E R D E C K", colors.Gray)
@@ -6319,7 +6209,6 @@ func layoutCyberdeck() fyne.CanvasObject {
 }
 
 func layoutIdentity() fyne.CanvasObject {
-	resetResources()
 	session.Domain = "app.Identity"
 	title := canvas.NewText("I D E N T I T Y", colors.Gray)
 	title.TextStyle = fyne.TextStyle{Bold: true}
@@ -6452,7 +6341,10 @@ func layoutIdentity() fyne.CanvasObject {
 		btnReg.Enable()
 		btnReg.Refresh()
 		session.NewUser = s
-		if len(s) > 5 {
+		// Name Service SCID Logic
+		//	15  IF STRLEN(name) >= 64 THEN GOTO 50 // skip names misuse
+		//	20  IF STRLEN(name) >= 6 THEN GOTO 40
+		if len(s) > 5 && len(s) < 64 {
 			valid, _, _ := checkUsername(s, -1)
 			if !valid {
 				btnReg.Enable()
@@ -6473,9 +6365,6 @@ func layoutIdentity() fyne.CanvasObject {
 		}
 
 		return nil
-	}
-	entryReg.OnChanged = func(s string) {
-		entryReg.Validate()
 	}
 
 	userBox := widget.NewListWithData(userList,
@@ -6633,7 +6522,6 @@ func layoutIdentity() fyne.CanvasObject {
 func layoutIdentityDetail(username string) fyne.CanvasObject {
 	var address string
 	var valid bool
-	resetResources()
 
 	wSpacer := widget.NewLabel(" ")
 
@@ -6901,8 +6789,6 @@ func layoutIdentityDetail(username string) fyne.CanvasObject {
 }
 
 func layoutWaiting(title *canvas.Text, heading *canvas.Text, sub *canvas.Text, link *widget.Hyperlink) fyne.CanvasObject {
-	resetResources()
-
 	rect := canvas.NewRectangle(color.Transparent)
 	rect.SetMinSize(fyne.NewSize(ui.Width*0.6, ui.Height*0.35))
 	rect2 := canvas.NewRectangle(color.Transparent)
@@ -6993,8 +6879,6 @@ func layoutWaiting(title *canvas.Text, heading *canvas.Text, sub *canvas.Text, l
 }
 
 func layoutAlert(t int) fyne.CanvasObject {
-	resetResources()
-
 	rect := canvas.NewRectangle(color.Transparent)
 	rect.SetMinSize(fyne.NewSize(ui.Width*0.6, ui.Width*0.35))
 	frame := &iframe{}
@@ -7482,8 +7366,6 @@ func layoutHistory() fyne.CanvasObject {
 }
 
 func layoutHistoryDetail(txid string) fyne.CanvasObject {
-	resetResources()
-
 	wSpacer := widget.NewLabel(" ")
 
 	rectWidth := canvas.NewRectangle(color.Transparent)
@@ -7863,7 +7745,6 @@ func layoutHistoryDetail(txid string) fyne.CanvasObject {
 }
 
 func layoutDatapad() fyne.CanvasObject {
-	resetResources()
 	session.Domain = "app.datapad"
 	title := canvas.NewText("D A T A P A D", colors.Gray)
 	title.TextStyle = fyne.TextStyle{Bold: true}
@@ -8111,8 +7992,6 @@ func layoutDatapad() fyne.CanvasObject {
 }
 
 func layoutPad() fyne.CanvasObject {
-	resetResources()
-
 	rectWidth := canvas.NewRectangle(color.Transparent)
 	rectWidth.SetMinSize(fyne.NewSize(ui.MaxWidth, 10))
 
@@ -8539,8 +8418,6 @@ func layoutPad() fyne.CanvasObject {
 }
 
 func layoutAccount() fyne.CanvasObject {
-	resetResources()
-
 	rectWidth := canvas.NewRectangle(color.Transparent)
 	rectWidth.SetMinSize(fyne.NewSize(ui.MaxWidth*0.99, 10))
 	rectWidth90 := canvas.NewRectangle(color.Transparent)
