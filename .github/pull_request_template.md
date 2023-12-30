@@ -36,9 +36,9 @@ Fixes # (issue)
 ## Checklist:
 
 - [ ] I have performed a self-review of my code
-- [ ] I have commented my code
+- [ ] I have commented my code (if applicable)
 - [ ] My changes generate no new warnings
-- [ ] I have updated the semver version
+- [ ] I have updated the semver version (if applicable)
 
 ## License
 
