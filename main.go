@@ -23,6 +23,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/driver/mobile"
 
 	"github.com/blang/semver"
 
@@ -46,10 +47,11 @@ const (
 	DEFAULT_LOCAL_P2P             = "127.0.0.1:10101"
 	DEFAULT_LOCAL_WORK            = "0.0.0.0:10100"
 	DEFAULT_REMOTE_DAEMON         = "node.derofoundation.org:11012"
+	DEFAULT_CONFIRMATION_TIMEOUT  = 5
 )
 
 // Globals
-var version = semver.MustParse("0.5.0")
+var version = semver.MustParse("0.5.1")
 var a fyne.App
 var engram Engram
 var session Session
@@ -143,6 +145,28 @@ func main() {
 	globals.Initialize()
 
 	session.Domain = "app.main"
+
+	// Intercept mobile back button event
+	session.Window.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
+		if ev.Name == mobile.KeyBack {
+			if session.LastDomain != nil {
+				session.Window.SetContent(layoutTransition())
+				session.Window.SetContent(session.LastDomain)
+			} else {
+				if engram.Disk != nil {
+					session.LastDomain = layoutDashboard()
+					session.LastDomain = session.Window.Content()
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutDashboard())
+				} else {
+					session.LastDomain = layoutMain()
+					session.LastDomain = session.Window.Content()
+					session.Window.SetContent(layoutTransition())
+					session.Window.SetContent(layoutMain())
+				}
+			}
+		}
+	})
 
 	// Check if mobile device
 	if a.Driver().Device().IsMobile() {
