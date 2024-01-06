@@ -103,6 +103,7 @@ type Session struct {
 	Window            fyne.Window
 	DesktopMode       bool
 	Domain            string
+	LastDomain        fyne.CanvasObject
 	Testnet           bool
 	Offline           bool
 	Language          int
@@ -566,6 +567,7 @@ func closeWallet() {
 		session.Path = ""
 		session.Name = ""
 
+		session.LastDomain = layoutMain()
 		session.Window.SetContent(layoutTransition())
 		session.Window.SetContent(layoutMain())
 		removeOverlays()
@@ -1868,9 +1870,7 @@ func startGnomon() {
 			}
 
 			// exclude the Gnomon SC, etc. to keep faster sync times
-			exclusions := []string{
-				"a05395bb0cf77adc850928b0db00eb5ca7a9ccbafd9a38d021c8d299ad5ce1a4;;;c9d23d2fc3aaa8e54e238a2218c0e5176a6e48780920fd8474fac5b0576110a2",
-			}
+			var exclusions []string
 
 			gnomon.Index = indexer.NewIndexer(gnomon.Graviton, gnomon.BBolt, "gravdb", term, height, session.Daemon, "daemon", false, true, config, exclusions)
 			indexer.InitLog(globals.Arguments, os.Stdout)
@@ -2126,6 +2126,7 @@ func convertBalance() {
 // Get the latest smart contract header data (must follow the standard here: https://github.com/civilware/artificer-nfa-standard/blob/main/Headers/README.md)
 func getContractHeader(scid crypto.Hash) (name string, desc string, icon string, owner string, code string) {
 	var headerData []*structures.SCIDVariable
+	var found bool
 
 	headerData = gnomon.Index.GravDBBackend.GetAllSCIDVariableDetails(scid.String())
 	if headerData == nil {
@@ -2139,14 +2140,17 @@ func getContractHeader(scid crypto.Hash) (name string, desc string, icon string,
 		switch key := h.Key.(type) {
 		case string:
 			if key == "nameHdr" {
+				found = true
 				name = h.Value.(string)
 			}
 
 			if key == "descrHdr" {
+				found = true
 				desc = h.Value.(string)
 			}
 
 			if key == "iconURLHdr" {
+				found = true
 				icon = h.Value.(string)
 			}
 
@@ -2156,6 +2160,39 @@ func getContractHeader(scid crypto.Hash) (name string, desc string, icon string,
 
 			if key == "C" {
 				code = h.Value.(string)
+			}
+		}
+	}
+
+	// Secondary check for headers in Gnomon SC
+	if !found {
+		headerData = gnomon.Index.GravDBBackend.GetAllSCIDVariableDetails(structures.MAINNET_GNOMON_SCID)
+		if headerData == nil {
+			addIndex := make(map[string]*structures.FastSyncImport)
+			addIndex[structures.MAINNET_GNOMON_SCID] = &structures.FastSyncImport{}
+			gnomon.Index.AddSCIDToIndex(addIndex, false, true)
+			headerData = gnomon.Index.GravDBBackend.GetAllSCIDVariableDetails(structures.MAINNET_GNOMON_SCID)
+		}
+
+		for _, h := range headerData {
+			if strings.Contains(h.Key.(string), scid.String()) {
+				switch key := h.Key.(type) {
+				case string:
+					if key == scid.String() {
+						query := h.Value.(string)
+						header := strings.Split(query, ";")
+
+						if len(header) > 2 {
+							name = header[0]
+							desc = header[1]
+							icon = header[2]
+						}
+					}
+
+					if key == scid.String()+"owner" {
+						owner = h.Value.(string)
+					}
+				}
 			}
 		}
 	}

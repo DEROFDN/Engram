@@ -24,8 +24,11 @@ import (
 
 type returnEntry struct {
 	widget.Entry
+	OnReturn func()
 }
 
+// NewReturnEntry creates a new single line entry widget that executes a function when the
+// return key is pressed
 func NewReturnEntry() *returnEntry {
 	entry := &returnEntry{}
 	entry.ExtendBaseWidget(entry)
@@ -35,18 +38,10 @@ func NewReturnEntry() *returnEntry {
 func (e *returnEntry) TypedKey(key *fyne.KeyEvent) {
 	switch key.Name {
 	case fyne.KeyReturn:
-		if session.Domain == "app.main" {
-			login()
-		} else if session.Domain == "app.register" {
-			//create()
-		}
+		e.OnReturn()
 	default:
 		e.Entry.TypedKey(key)
 	}
-}
-
-func (e *returnEntry) onReturn() {
-	login()
 }
 
 var _ fyne.Draggable = (*iframe)(nil)
@@ -183,6 +178,7 @@ type mobileEntry struct {
 	OnFocusGained func()
 }
 
+// NewMobileEntry creates a new single line entry widget with more options for mobile devices
 func NewMobileEntry() *mobileEntry {
 	entry := &mobileEntry{}
 	entry.ExtendBaseWidget(entry)
@@ -203,6 +199,7 @@ func (o *contextMenuButton) Tapped(e *fyne.PointEvent) {
 	widget.ShowPopUpMenuAtPosition(o.menu, fyne.CurrentApp().Driver().CanvasForObject(o), e.AbsolutePosition)
 }
 
+// NewContextMenuButton creates a new button widget with a dropdown menu
 func NewContextMenuButton(label string, image fyne.Resource, menu *fyne.Menu) *contextMenuButton {
 	o := &contextMenuButton{menu: menu}
 	o.Text = label
