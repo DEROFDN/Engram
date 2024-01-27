@@ -129,13 +129,13 @@ func (o *iframe) DragEnd() {
 	*/
 	if engram.Disk != nil {
 		if nav.CurY > nav.PosY+30 {
-			if session.Domain == "app.messages" {
+			if session.Domain == appMessages {
 				session.Window.SetContent(layoutTransition())
 				session.Window.SetContent(layoutMessages())
-			} else if session.Domain == "app.messages.contact" {
+			} else if session.Domain == appMessagesContact {
 				session.Window.SetContent(layoutTransition())
 				session.Window.SetContent(layoutPM())
-			} else if session.Domain == "app.Identity" {
+			} else if session.Domain == appIdentity {
 				session.Window.SetContent(layoutTransition())
 				session.Window.SetContent(layoutIdentity())
 			}
@@ -196,7 +196,11 @@ type contextMenuButton struct {
 }
 
 func (o *contextMenuButton) Tapped(e *fyne.PointEvent) {
-	widget.ShowPopUpMenuAtPosition(o.menu, fyne.CurrentApp().Driver().CanvasForObject(o), e.AbsolutePosition)
+	widget.ShowPopUpMenuAtPosition(
+		o.menu,
+		fyne.CurrentApp().Driver().CanvasForObject(o),
+		e.AbsolutePosition,
+	)
 }
 
 // NewContextMenuButton creates a new button widget with a dropdown menu

@@ -25,55 +25,16 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/driver/mobile"
 
-	"github.com/blang/semver"
-
 	"github.com/deroproject/derohe/globals"
 	"github.com/deroproject/derohe/walletapi"
 )
 
-// Constants
-const (
-	DEFAULT_TESTNET_WALLET_PORT   = 40403
-	DEFAULT_TESTNET_DAEMON_PORT   = 40402
-	DEFAULT_TESTNET_WORK_PORT     = 40400
-	DEFAULT_WALLET_PORT           = 10103
-	DEFAULT_DAEMON_PORT           = 10102
-	DEFAULT_WORK_PORT             = 10100
-	DEFAULT_LOCAL_TESTNET_DAEMON  = "127.0.0.1:40402"
-	DEFAULT_LOCAL_TESTNET_P2P     = "127.0.0.1:40401"
-	DEFAULT_LOCAL_TESTNET_WORK    = "0.0.0.0:40400"
-	DEFAULT_REMOTE_TESTNET_DAEMON = "testnetexplorer.dero.io:40402"
-	DEFAULT_LOCAL_DAEMON          = "127.0.0.1:10102"
-	DEFAULT_LOCAL_P2P             = "127.0.0.1:10101"
-	DEFAULT_LOCAL_WORK            = "0.0.0.0:10100"
-	DEFAULT_REMOTE_DAEMON         = "node.derofoundation.org:11012"
-	DEFAULT_CONFIRMATION_TIMEOUT  = 5
-)
-
-// Globals
-var version = semver.MustParse("0.5.1")
-var a fyne.App
-var engram Engram
-var session Session
-var gnomon Gnomon
-var messages Messages
-var status Status
-var tx Transfers
-var res Res
-var colors Colors
-var cyberdeck Cyberdeck
-var themes Theme
-var rpc_client Client
-var Connected bool
-var nav Navigation
-var ui UI
-
 func main() {
 	// Initialize application
-	a = app.NewWithID("io.dero.engram") // Engram
+	a = app.NewWithID(appID) // Engram
 	a.Settings().SetTheme(themes.main)
 
-	session.Window = a.NewWindow("Engram")
+	session.Window = a.NewWindow(appName)
 	session.Window.SetMaster()
 	session.Window.SetCloseIntercept(func() {
 		if engram.Disk != nil {
@@ -84,7 +45,7 @@ func main() {
 		os.Exit(0)
 	})
 	session.Window.SetPadded(false)
-	session.Domain = "app.main.loading"
+	session.Domain = appMainLoading
 	session.Window.CenterOnScreen()
 
 	// Load resources
@@ -94,22 +55,86 @@ func main() {
 	session.Window.SetIcon(resourceIconPng)
 
 	// Init colors
-	colors.Network = color.RGBA{R: 67, G: 239, B: 67, A: 255}
-	colors.Account = color.RGBA{R: 233, G: 228, B: 233, A: 0xff}
-	colors.DarkMatter = color.RGBA{21, 23, 30, 255}
-	colors.Red = color.RGBA{R: 214, B: 74, G: 70, A: 255}
-	colors.DarkGreen = color.RGBA{17, 127, 78, 0xff}
-	colors.Green = color.RGBA{19, 202, 105, 0xff}
-	colors.Blue = color.RGBA{R: 27, B: 249, G: 127, A: 255}
-	colors.Gray = color.RGBA{R: 99, B: 110, G: 99, A: 0xff}
-	colors.Yellow = color.RGBA{244, 208, 11, 255}
-	colors.Cold = color.RGBA{60, 73, 92, 255}
-	colors.Flint = color.RGBA{44, 44, 52, 0xff}
+	colors.Network = color.RGBA{
+		R: 67,
+		G: 239,
+		B: 67,
+		A: 255,
+	}
+	colors.Account = color.RGBA{
+		R: 233,
+		G: 228,
+		B: 233,
+		A: 0xff,
+	}
+	colors.DarkMatter = color.RGBA{
+		21,
+		23,
+		30,
+		255,
+	}
+	colors.Red = color.RGBA{
+		R: 214,
+		B: 74,
+		G: 70,
+		A: 255,
+	}
+	colors.DarkGreen = color.RGBA{
+		17,
+		127,
+		78,
+		0xff,
+	}
+	colors.Green = color.RGBA{
+		19,
+		202,
+		105,
+		0xff,
+	}
+	colors.Blue = color.RGBA{
+		R: 27,
+		B: 249,
+		G: 127,
+		A: 255,
+	}
+	colors.Gray = color.RGBA{
+		R: 99,
+		B: 110,
+		G: 99,
+		A: 0xff,
+	}
+	colors.Yellow = color.RGBA{
+		244,
+		208,
+		11,
+		255,
+	}
+	colors.Cold = color.RGBA{
+		60,
+		73,
+		92,
+		255,
+	}
+	colors.Flint = color.RGBA{
+		44,
+		44,
+		52,
+		0xff,
+	}
 
 	// Init objects
-	status.Canvas = canvas.NewText("", colors.Network)
-	status.Network = canvas.NewText("", colors.Network)
-	session.BalanceText = canvas.NewText("", colors.Account)
+	status.Canvas = canvas.NewText(
+		string_,
+		colors.Network,
+	)
+	status.Network = canvas.NewText(
+		string_,
+		colors.Network,
+	)
+	session.BalanceText = canvas.NewText(
+		string_,
+		colors.Account,
+	)
 	status.Connection = canvas.NewCircle(colors.Red)
 	status.Connection.StrokeColor = colors.Red
 	status.Connection.StrokeWidth = 0
@@ -123,28 +148,36 @@ func main() {
 	status.Cyberdeck.StrokeWidth = 0
 	status.Cyberdeck.Refresh()
 
-	fmt.Printf("Engram v%s (Beta)\n", version)
-	fmt.Printf("Copyright 2023-2024 DERO Foundation. All rights reserved.\n")
-	fmt.Printf("OS: %s ARCH: %s GOMAXPROCS: %d\n\n", runtime.GOOS, runtime.GOARCH, runtime.GOMAXPROCS(0))
-	fmt.Printf("\"Insist on yourself; never imitate. Your own gift you can present every moment with the \ncumulative force of a whole life's cultivation; but of the adopted talent of another, \nyou have only an extemporaneous, half possession.\"\n\n")
+	fmt.Printf(
+		engramBeta,
+		version,
+	)
+	fmt.Printf(copyrightNotice)
+	fmt.Printf(
+		osArchGoMax,
+		runtime.GOOS,
+		runtime.GOARCH,
+		runtime.GOMAXPROCS(0),
+	)
+	fmt.Printf(quote)
 
 	// Map arguments for DERO network (TODO: Fully support console arguments)
 	globals.Arguments = make(map[string]interface{})
-	globals.Arguments["--debug"] = false
-	globals.Arguments["--testnet"] = false
-	globals.Arguments["--daemon-address"] = "127.0.0.1:10102"
-	globals.Arguments["--p2p-bind"] = "127.0.0.1:10101"
-	globals.Arguments["--rpc-server"] = true
-	globals.Arguments["--rpc-bind"] = "127.0.0.1:10103"
-	globals.Arguments["--allow-rpc-password-change"] = true
-	globals.Arguments["--rpc-login"] = newRPCUsername() + ":" + newRPCPassword()
-	globals.Arguments["--offline"] = false
-	globals.Arguments["--remote"] = false
+	globals.Arguments[stringFlagdebug] = false
+	globals.Arguments[stringFlagtestnet] = false
+	globals.Arguments[stringFlagdaemonaddress] = DEFAULT_LOCAL_DAEMON
+	globals.Arguments[stringFlagp2pbind] = DEFAULT_LOCAL_P2P
+	globals.Arguments[stringFlagrpcserver] = true
+	globals.Arguments[stringFlagrpcbind] = DEFAULT_LOCAL_WALLET_RPC
+	globals.Arguments[stringFlagallowrpcpasschange] = true
+	globals.Arguments[stringFlagrpclogin] = newRPCUsername() + singlecolon + newRPCPassword()
+	globals.Arguments[stringFlageoffline] = false
+	globals.Arguments[stringFlagremote] = false
 
 	initSettings()
 	globals.Initialize()
 
-	session.Domain = "app.main"
+	session.Domain = appMain
 
 	// Intercept mobile back button event
 	session.Window.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {

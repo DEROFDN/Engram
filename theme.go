@@ -26,39 +26,118 @@ type eTheme struct{}
 func (eTheme) Color(c fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
 	switch c {
 	case theme.ColorNameBackground:
-		return color.NRGBA{R: 21, G: 23, B: 30, A: 0xff}
+		return color.NRGBA{
+			R: 21,
+			G: 23,
+			B: 30,
+			A: 0xff,
+		}
 	case theme.ColorNameHyperlink:
-		return color.NRGBA{R: 235, G: 235, B: 235, A: 0x99}
+		return color.NRGBA{
+			R: 235,
+			G: 235,
+			B: 235,
+			A: 0x99,
+		}
 	case theme.ColorNameButton:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x75}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x75,
+		}
 	case theme.ColorNameDisabledButton:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x22}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x22,
+		}
 	case theme.ColorNameDisabled:
-		return color.NRGBA{R: 164, G: 164, B: 164, A: 0x42}
+		return color.NRGBA{
+			R: 164,
+			G: 164,
+			B: 164,
+			A: 0x42,
+		}
 	case theme.ColorNameError:
-		return color.NRGBA{R: 0xf4, G: 0x43, B: 0x36, A: 0xff}
+		return color.NRGBA{
+			R: 0xf4,
+			G: 0x43,
+			B: 0x36,
+			A: 0xff,
+		}
 	case theme.ColorNameFocus:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x88}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x88,
+		}
 	case theme.ColorNameForeground:
-		return color.NRGBA{R: 208, G: 208, B: 208, A: 0xff}
+		return color.NRGBA{
+			R: 208,
+			G: 208,
+			B: 208,
+			A: 0xff,
+		}
 	case theme.ColorNameHover:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x99}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x99,
+		}
 	case theme.ColorNameMenuBackground:
-		return color.NRGBA{R: 31, G: 33, B: 40, A: 0xee}
+		return color.NRGBA{
+			R: 31,
+			G: 33,
+			B: 40,
+			A: 0xee,
+		}
 	case theme.ColorNameInputBackground:
-		return color.Alpha16{A: 0x0}
+		return color.Alpha16{
+			A: 0x0,
+		}
 	case theme.ColorNameSeparator:
-		return color.NRGBA{R: 0x88, G: 0x88, B: 0x88, A: 0x35}
+		return color.NRGBA{
+			R: 0x88,
+			G: 0x88,
+			B: 0x88,
+			A: 0x35,
+		}
 	case theme.ColorNamePlaceHolder:
-		return color.NRGBA{R: 0x88, G: 0x88, B: 0x88, A: 0xff}
+		return color.NRGBA{
+			R: 0x88,
+			G: 0x88,
+			B: 0x88,
+			A: 0xff,
+		}
 	case theme.ColorNamePressed:
-		return color.NRGBA{R: 208, G: 208, B: 208, A: 0x19}
+		return color.NRGBA{
+			R: 208,
+			G: 208,
+			B: 208,
+			A: 0x19,
+		}
 	case theme.ColorNamePrimary:
-		return color.NRGBA{R: 208, G: 208, B: 208, A: 0xff}
+		return color.NRGBA{
+			R: 208,
+			G: 208,
+			B: 208,
+			A: 0xff,
+		}
 	case theme.ColorNameScrollBar:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x99}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x99,
+		}
 	case theme.ColorNameShadow:
-		return color.Alpha16{0x19}
+		return color.Alpha16{
+			0x19,
+		}
 	default:
 		return theme.DefaultTheme().Color(c, v)
 	}
@@ -117,37 +196,111 @@ type eTheme2 struct{}
 func (eTheme2) Color(c fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
 	switch c {
 	case theme.ColorNameBackground:
-		return color.NRGBA{R: 21, G: 23, B: 30, A: 0xff}
+		return color.NRGBA{
+			R: 21,
+			G: 23,
+			B: 30,
+			A: 0xff,
+		}
 	case theme.ColorNameHyperlink:
-		return color.NRGBA{R: 235, G: 235, B: 235, A: 0x99}
+		return color.NRGBA{
+			R: 235,
+			G: 235,
+			B: 235,
+			A: 0x99,
+		}
 	case theme.ColorNameButton:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x75}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x75,
+		}
 	case theme.ColorNameDisabledButton:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x22}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x22,
+		}
 	case theme.ColorNameDisabled:
-		return color.NRGBA{R: 164, G: 164, B: 164, A: 0x42}
+		return color.NRGBA{
+			R: 164,
+			G: 164,
+			B: 164,
+			A: 0x42,
+		}
 	case theme.ColorNameError:
-		return color.NRGBA{R: 0xf4, G: 0x43, B: 0x36, A: 0xff}
+		return color.NRGBA{
+			R: 0xf4,
+			G: 0x43,
+			B: 0x36,
+			A: 0xff,
+		}
 	case theme.ColorNameFocus:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x88}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x88,
+		}
 	case theme.ColorNameForeground:
-		return color.NRGBA{R: 208, G: 208, B: 208, A: 0xff}
+		return color.NRGBA{
+			R: 208,
+			G: 208,
+			B: 208,
+			A: 0xff,
+		}
 	case theme.ColorNameHover:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x99}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x99,
+		}
 	case theme.ColorNameMenuBackground:
-		return color.NRGBA{R: 21, G: 23, B: 30, A: 0xee}
+		return color.NRGBA{
+			R: 21,
+			G: 23,
+			B: 30,
+			A: 0xee,
+		}
 	case theme.ColorNameInputBackground:
-		return color.Alpha16{A: 0x0}
+		return color.Alpha16{
+			A: 0x0,
+		}
 	case theme.ColorNamePlaceHolder:
-		return color.NRGBA{R: 0x88, G: 0x88, B: 0x88, A: 0xff}
+		return color.NRGBA{
+			R: 0x88,
+			G: 0x88,
+			B: 0x88,
+			A: 0xff,
+		}
 	case theme.ColorNamePressed:
-		return color.NRGBA{R: 208, G: 208, B: 208, A: 0x19}
+		return color.NRGBA{
+			R: 208,
+			G: 208,
+			B: 208,
+			A: 0x19,
+		}
 	case theme.ColorNamePrimary:
-		return color.NRGBA{R: 208, G: 208, B: 208, A: 0xff}
+		return color.NRGBA{
+			R: 208,
+			G: 208,
+			B: 208,
+			A: 0xff,
+		}
 	case theme.ColorNameScrollBar:
-		return color.NRGBA{R: 19, G: 202, B: 105, A: 0x99}
+		return color.NRGBA{
+			R: 19,
+			G: 202,
+			B: 105,
+			A: 0x99,
+		}
 	case theme.ColorNameShadow:
-		return color.Alpha16{0x19}
+		return color.Alpha16{
+			0x19,
+		}
 	default:
 		return theme.DefaultTheme().Color(c, v)
 	}
