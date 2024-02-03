@@ -3019,7 +3019,11 @@ func transferUsername(username string, address string) (err error) {
 	if !session.Testnet {
 		dest = DERO_DEVELOPER_MAINNET_ADDRESS
 	} else {
-		dest = DERO_DEVELOPER_TESTNET_ADDRESS
+		if globals.IsSimulator() {
+			dest = DERO_DEVELOPER_SIMULATOR_ADDRESS
+		} else {
+			dest = DERO_DEVELOPER_TESTNET_ADDRESS
+		}
 	}
 
 	transfer := rpc.Transfer{
@@ -3097,7 +3101,6 @@ func executeContractFunction(
 ) (err error) {
 
 	var args = rpc.Arguments{}
-	var burn uint64
 	var zero uint64
 	var dest string
 
@@ -3151,34 +3154,48 @@ func executeContractFunction(
 	if !session.Testnet {
 		dest = DERO_DEVELOPER_MAINNET_ADDRESS
 	} else {
-		dest = DERO_DEVELOPER_TESTNET_ADDRESS
+		if globals.IsSimulator() {
+			dest = DERO_DEVELOPER_SIMULATOR_ADDRESS
+		} else {
+			dest = DERO_DEVELOPER_TESTNET_ADDRESS
+		}
 	}
 
-	var transfer rpc.Transfer
+	var transfers []rpc.Transfer
 
 	if dero_amount != zero {
-		burn = dero_amount
+		burn := dero_amount
 
-		transfer = rpc.Transfer{
+		transfer := rpc.Transfer{
 			Destination: dest,
 			Amount:      0,
 			Burn:        burn,
 		}
-	} else if asset_amount != zero {
-		burn = asset_amount
 
-		transfer = rpc.Transfer{
+		transfers = append(transfers, transfer)
+	}
+
+	if asset_amount != zero {
+		burn := asset_amount
+
+		transfer := rpc.Transfer{
 			SCID:        scid,
 			Destination: dest,
 			Amount:      0,
 			Burn:        burn,
 		}
-	} else {
-		transfer = rpc.Transfer{
+
+		transfers = append(transfers, transfer)
+	}
+
+	if len(transfers) < 1 {
+		transfer := rpc.Transfer{
 			Destination: dest,
 			Amount:      0,
 			Burn:        0,
 		}
+
+		transfers = append(transfers, transfer)
 	}
 
 	gasParams := rpc.GasEstimate_Params{
@@ -3186,7 +3203,7 @@ func executeContractFunction(
 		SC_Value:  0,
 		Ringsize:  DEFAULT_SC_RINGSIZE,
 		Signer:    engram.Disk.GetAddress().String(),
-		Transfers: []rpc.Transfer{transfer},
+		Transfers: transfers,
 	}
 
 	storage, err := getGasEstimate(gasParams)
@@ -3200,12 +3217,14 @@ func executeContractFunction(
 	}
 
 	tx, err := engram.Disk.TransferPayload0(
-		[]rpc.Transfer{transfer},
+		transfers,
 		DEFAULT_SC_RINGSIZE,
 		false,
 		args,
 		storage,
-		false)
+		false,
+	)
+
 	if err != nil {
 		fmt.Printf(
 			errBuildTx,
@@ -3318,6 +3337,10 @@ func getTxData(txid string) (result rpc.GetTransaction_Result, err error) {
 		nil,
 	)
 
+	if err != nil {
+		return
+	}
+
 	input_output := rwc.New(rpc_client.WS)
 	rpc_client.RPC = jrpc2.NewClient(
 		channel.RawJSON(input_output, input_output),
@@ -3368,7 +3391,7 @@ func proveGetTxData(txid string, proof_string string) (result ProofData, err err
 
 	result.Receivers, result.Amounts, _, result.Payloads, err = proof.Prove(
 		proof_string,
-		txid,
+		data.Txs[0].As_Hex,
 		ring,
 		engram.Disk.GetNetwork(),
 	)

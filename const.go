@@ -48,8 +48,9 @@ const (
 	DEFAULT_MAX_RINGSIZE         = 128
 
 	// platform
-	DERO_DEVELOPER_MAINNET_ADDRESS = "dero1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgny8270"
-	DERO_DEVELOPER_TESTNET_ADDRESS = "deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p"
+	DERO_DEVELOPER_MAINNET_ADDRESS   = "dero1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgny8270"
+	DERO_DEVELOPER_TESTNET_ADDRESS   = "deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p"
+	DERO_DEVELOPER_SIMULATOR_ADDRESS = "deto1qyvyeyzrcm2fzf6kyq7egkes2ufgny5xn77y6typhfx9s7w3mvyd5qqynr5hx"
 
 	// daemon
 	DAEMON_GET_GAS_ESTIMATE = "DERO.GetGasEstimate"

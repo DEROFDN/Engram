@@ -20,7 +20,7 @@ import (
 
 // Globals
 var (
-	version    = semver.MustParse("0.5.1")
+	version    = semver.MustParse("0.5.2")
 	a          fyne.App
 	engram     Engram
 	session    Session
