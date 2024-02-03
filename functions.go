@@ -3023,6 +3023,7 @@ func transferUsername(username string, address string) (err error) {
 			dest = DERO_DEVELOPER_SIMULATOR_ADDRESS
 		} else {
 			dest = DERO_DEVELOPER_TESTNET_ADDRESS
+
 		}
 	}
 
