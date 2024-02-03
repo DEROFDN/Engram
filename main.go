@@ -51,7 +51,7 @@ const (
 )
 
 // Globals
-var version = semver.MustParse("0.5.1")
+var version = semver.MustParse("0.5.2")
 var a fyne.App
 var engram Engram
 var session Session

@@ -2247,7 +2247,11 @@ func transferUsername(username string, address string) (err error) {
 	if !session.Testnet {
 		dest = "dero1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgny8270"
 	} else {
-		dest = "deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p"
+		if globals.IsSimulator() {
+			dest = "deto1qyvyeyzrcm2fzf6kyq7egkes2ufgny5xn77y6typhfx9s7w3mvyd5qqynr5hx"
+		} else {
+			dest = "deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p"
+		}
 	}
 
 	transfer := rpc.Transfer{
@@ -2294,7 +2298,6 @@ func transferUsername(username string, address string) (err error) {
 // Execute arbitrary exportable smart contract functions
 func executeContractFunction(scid crypto.Hash, dero_amount uint64, asset_amount uint64, funcName string, funcType rpc.DataType, params []dvm.Variable) (err error) {
 	var args = rpc.Arguments{}
-	var burn uint64
 	var zero uint64
 	var dest string
 
@@ -2313,34 +2316,48 @@ func executeContractFunction(scid crypto.Hash, dero_amount uint64, asset_amount 
 	if !session.Testnet {
 		dest = "dero1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgny8270"
 	} else {
-		dest = "deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p"
+		if globals.IsSimulator() {
+			dest = "deto1qyvyeyzrcm2fzf6kyq7egkes2ufgny5xn77y6typhfx9s7w3mvyd5qqynr5hx"
+		} else {
+			dest = "deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p"
+		}
 	}
 
-	var transfer rpc.Transfer
+	var transfers []rpc.Transfer
 
 	if dero_amount != zero {
-		burn = dero_amount
+		burn := dero_amount
 
-		transfer = rpc.Transfer{
+		transfer := rpc.Transfer{
 			Destination: dest,
 			Amount:      0,
 			Burn:        burn,
 		}
-	} else if asset_amount != zero {
-		burn = asset_amount
 
-		transfer = rpc.Transfer{
+		transfers = append(transfers, transfer)
+	}
+
+	if asset_amount != zero {
+		burn := asset_amount
+
+		transfer := rpc.Transfer{
 			SCID:        scid,
 			Destination: dest,
 			Amount:      0,
 			Burn:        burn,
 		}
-	} else {
-		transfer = rpc.Transfer{
+
+		transfers = append(transfers, transfer)
+	}
+
+	if len(transfers) < 1 {
+		transfer := rpc.Transfer{
 			Destination: dest,
 			Amount:      0,
 			Burn:        0,
 		}
+
+		transfers = append(transfers, transfer)
 	}
 
 	gasParams := rpc.GasEstimate_Params{
@@ -2348,7 +2365,7 @@ func executeContractFunction(scid crypto.Hash, dero_amount uint64, asset_amount 
 		SC_Value:  0,
 		Ringsize:  2,
 		Signer:    engram.Disk.GetAddress().String(),
-		Transfers: []rpc.Transfer{transfer},
+		Transfers: transfers,
 	}
 
 	storage, err := getGasEstimate(gasParams)
@@ -2357,7 +2374,7 @@ func executeContractFunction(scid crypto.Hash, dero_amount uint64, asset_amount 
 		return
 	}
 
-	tx, err := engram.Disk.TransferPayload0([]rpc.Transfer{transfer}, 2, false, args, storage, false)
+	tx, err := engram.Disk.TransferPayload0(transfers, 2, false, args, storage, false)
 	if err != nil {
 		fmt.Printf("[%s] Build Transaction Error: %s\n", funcName, err)
 		return
@@ -2424,6 +2441,9 @@ func getTxData(txid string) (result rpc.GetTransaction_Result, err error) {
 	params.Tx_Hashes = append(params.Tx_Hashes, txid)
 
 	rpc_client.WS, _, err = websocket.DefaultDialer.Dial("ws://"+session.Daemon+"/ws", nil)
+	if err != nil {
+		return
+	}
 
 	input_output := rwc.New(rpc_client.WS)
 	rpc_client.RPC = jrpc2.NewClient(channel.RawJSON(input_output, input_output), nil)
@@ -2457,7 +2477,7 @@ func proveGetTxData(txid string, proof_string string) (result ProofData, err err
 
 	ring := data.Txs[0].Ring
 
-	result.Receivers, result.Amounts, _, result.Payloads, err = proof.Prove(proof_string, txid, ring, engram.Disk.GetNetwork())
+	result.Receivers, result.Amounts, _, result.Payloads, err = proof.Prove(proof_string, data.Txs[0].As_Hex, ring, engram.Disk.GetNetwork())
 
 	return
 }
