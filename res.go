@@ -20,26 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"fyne.io/fyne/v2/canvas"
-	x "fyne.io/x/fyne/widget"
 )
-
-type Res struct {
-	bg          *canvas.Image
-	bg2         *canvas.Image
-	icon        *canvas.Image
-	icon_sm     *canvas.Image
-	load        *canvas.Image
-	loading     *x.AnimatedGif
-	header      *canvas.Image
-	spacer      *canvas.Image
-	dero        *canvas.Image
-	gram        *canvas.Image
-	block       *canvas.Image
-	red_alert   *canvas.Image
-	green_alert *canvas.Image
-}
 
 // Get app path
 func AppPath() (result string) {
@@ -54,21 +35,30 @@ func AppPath() (result string) {
 }
 
 func GetAccounts() (result []string, err error) {
-	path := ""
+	path := string_
 
 	if !session.Testnet {
-		_, err = os.Stat(filepath.Join(AppPath(), "mainnet"))
+		_, err = os.Stat(
+			filepath.Join(
+				AppPath(),
+				stringmainnet,
+			))
 		if err != nil {
 			return
 		} else {
-			path = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
+			path = filepath.Join(AppPath(), stringmainnet) + string(filepath.Separator)
 		}
 	} else {
-		_, err = os.Stat(filepath.Join(AppPath(), "testnet"))
+		_, err = os.Stat(
+			filepath.Join(
+				AppPath(),
+				stringtestnet,
+			),
+		)
 		if err != nil {
 			return
 		} else {
-			path = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
+			path = filepath.Join(AppPath(), stringtestnet) + string(filepath.Separator)
 		}
 	}
 
@@ -79,7 +69,9 @@ func GetAccounts() (result []string, err error) {
 		check, _ := os.Stat(match)
 		if !check.IsDir() {
 			if strings.Contains(match, ".db") {
-				split := strings.Split(match, string(filepath.Separator))
+				split := strings.Split(match, string(
+					filepath.Separator,
+				))
 				pos := len(split) - 1
 				match = split[pos]
 				result = append(result, match)
@@ -110,15 +102,33 @@ func findAccount() (result bool) {
 }
 
 func checkDir() (err error) {
-	err = os.MkdirAll(filepath.Join(AppPath(), "mainnet"), os.ModePerm)
+	err = os.MkdirAll(
+		filepath.Join(
+			AppPath(),
+			stringmainnet,
+		),
+		os.ModePerm,
+	)
 	if err != nil {
 		return
 	}
-	err = os.MkdirAll(filepath.Join(AppPath(), "testnet"), os.ModePerm)
+	err = os.MkdirAll(
+		filepath.Join(
+			AppPath(),
+			stringtestnet,
+		),
+		os.ModePerm,
+	)
 	if err != nil {
 		return
 	}
-	err = os.MkdirAll(filepath.Join(AppPath(), "datashards"), os.ModePerm)
+	err = os.MkdirAll(
+		filepath.Join(
+			AppPath(),
+			stringdatashards,
+		),
+		os.ModePerm,
+	)
 	if err != nil {
 		return
 	}

@@ -35,27 +35,71 @@ func GetDir() (result string, err error) {
 
 	if runtime.GOOS == "darwin" {
 		if !session.Testnet {
-			result = filepath.Join(AppPath(), "Contents", "Resources", "mainnet") + string(filepath.Separator)
+			result = filepath.Join(
+				AppPath(),
+				stringContents,
+				stringResources,
+				stringmainnet,
+			) + string(
+				filepath.Separator,
+			)
 		} else {
-			result = filepath.Join(AppPath(), "Contents", "Resources", "testnet") + string(filepath.Separator)
+			result = filepath.Join(
+				AppPath(),
+				stringContents,
+				stringResources,
+				stringtestnet,
+			) + string(
+				filepath.Separator,
+			)
 		}
 	} else if runtime.GOOS == "android" {
 		if !session.Testnet {
-			result = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
+			result = filepath.Join(
+				AppPath(),
+				stringmainnet,
+			) + string(
+				filepath.Separator,
+			)
 		} else {
-			result = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
+			result = filepath.Join(
+				AppPath(),
+				stringtestnet,
+			) + string(
+				filepath.Separator,
+			)
 		}
 	} else if runtime.GOOS == "ios" {
 		if !session.Testnet {
-			result = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
+			result = filepath.Join(
+				AppPath(),
+				stringmainnet,
+			) + string(
+				filepath.Separator,
+			)
 		} else {
-			result = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
+			result = filepath.Join(
+				AppPath(),
+				stringtestnet,
+			) + string(
+				filepath.Separator,
+			)
 		}
 	} else {
 		if !session.Testnet {
-			result = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
+			result = filepath.Join(
+				AppPath(),
+				stringmainnet,
+			) + string(
+				filepath.Separator,
+			)
 		} else {
-			result = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
+			result = filepath.Join(
+				AppPath(),
+				stringtestnet,
+			) + string(
+				filepath.Separator,
+			)
 		}
 	}
 
@@ -63,13 +107,27 @@ func GetDir() (result string, err error) {
 }
 
 // Get a datashard's path
-func GetShard() (result string, err error) {
+func GetShard() (result string,
+	err error) {
 	if engram.Disk == nil {
-		result = filepath.Join(AppPath(), "datashards", "settings")
+		result = filepath.Join(
+			AppPath(),
+			stringdatashards,
+			stringsettings,
+		)
 		return
 	} else {
 		address := engram.Disk.GetAddress().String()
-		result = filepath.Join(AppPath(), "datashards", fmt.Sprintf("%x", sha1.Sum([]byte(address))))
+		result = filepath.Join(
+			AppPath(),
+			stringdatashards,
+			fmt.Sprintf(
+				"%x",
+				sha1.Sum(
+					[]byte(address),
+				),
+			),
+		)
 		return
 	}
 }
@@ -78,15 +136,15 @@ func GetShard() (result string, err error) {
 // Requires the user to have an active wallet open
 func StoreEncryptedValue(t string, key []byte, value []byte) (err error) {
 	if engram.Disk == nil {
-		err = errors.New("error: no active account found")
+		err = errors.New(errNoActive)
 		return
 	}
 
-	if t == "" {
-		err = errors.New("error: missing graviton tree input")
+	if t == string_ {
+		err = errors.New(errGravitionTree)
 		return
 	} else if key == nil {
-		err = errors.New("error: missing graviton key input")
+		err = errors.New(errGravitonKey)
 		return
 	}
 
@@ -130,11 +188,11 @@ func StoreEncryptedValue(t string, key []byte, value []byte) (err error) {
 
 // Store a key-value in a Graviton tree
 func StoreValue(t string, key []byte, value []byte) (err error) {
-	if t == "" {
-		err = errors.New("error: missing graviton tree input")
+	if t == string_ {
+		err = errors.New(errGravitionTree)
 		return
 	} else if key == nil {
-		err = errors.New("error: missing graviton key input")
+		err = errors.New(errGravitonKey)
 		return
 	}
 
@@ -173,13 +231,13 @@ func StoreValue(t string, key []byte, value []byte) (err error) {
 
 // Get a key-value from a Graviton tree
 func GetValue(t string, key []byte) (result []byte, err error) {
-	result = []byte("")
+	result = []byte(string_)
 
-	if t == "" {
-		err = errors.New("error: missing graviton tree input")
+	if t == string_ {
+		err = errors.New(errGravitionTree)
 		return
 	} else if key == nil {
-		err = errors.New("error: missing graviton key input")
+		err = errors.New(errGravitonKey)
 		return
 	}
 
@@ -214,13 +272,13 @@ func GetValue(t string, key []byte) (result []byte, err error) {
 // Get an encrypted key-value from a Graviton tree and then decrypt it
 // Requires the user to have an active wallet open
 func GetEncryptedValue(t string, key []byte) (result []byte, err error) {
-	result = []byte("")
+	result = []byte(string_)
 
-	if t == "" {
-		err = errors.New("error: missing graviton tree input")
+	if t == string_ {
+		err = errors.New(errGravitionTree)
 		return
 	} else if key == nil {
-		err = errors.New("error: missing graviton key input")
+		err = errors.New(errGravitonKey)
 		return
 	}
 
@@ -260,11 +318,11 @@ func GetEncryptedValue(t string, key []byte) (result []byte, err error) {
 
 // Delete a key-value in a Graviton tree
 func DeleteKey(t string, key []byte) (err error) {
-	if t == "" {
-		err = errors.New("error: missing graviton tree input")
+	if t == string_ {
+		err = errors.New(errGravitionTree)
 		return
 	} else if key == nil {
-		err = errors.New("error: missing graviton key input")
+		err = errors.New(errGravitonKey)
 		return
 	}
 
