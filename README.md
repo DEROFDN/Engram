@@ -1,4 +1,4 @@
-![Powered by DERO](https://github.com/DEROFDN/Engram/blob/main/ss1.png)
+<img src="ss1.png" alt="Engram Enigma" title="Powered by DERO">
 
 
 
@@ -14,11 +14,14 @@
 * Register and transfer user-friendly addresses (usernames)
 * Gnomon integration for blockchain indexing
 * Encrypted Notepad
-
-### Upcoming Features
 * Web socket support for dApp/web3 connections
 * Sign files using your wallet to guarantee authenticity
+* Explore [TELA](https://github.com/civilware/tela) dApps
+* Supports [EPOCH](https://github.com/civilware/epoch) protocol
+
+### Upcoming Features
 * Multi-language support
+* Mobile camera support
 
 ### Releases
 Engram is portable. We plan to deploy releases on the following platforms:
@@ -34,17 +37,36 @@ See [releases](https://github.com/DEROFDN/Engram/releases) for the latest builds
 
 <b>Required Processes</b>
 
-* git clone github.com/DEROFDN/Engram.git
-* cd Engram
-* go build .
-
-Build for production:
-
-* fyne package -name Engram -os windows -icon path\to\icon.png
-
 Please see: https://developer.fyne.io/
 
-You are required to have all the dependencies for Fyne too. Specifically (if you are on windows), <b>TDM-GCC-64</b>.
+You are required to have all the dependencies for Fyne installed. Specifically (if you are on windows), <b>TDM-GCC-64</b>.
+
+* Install fyne cmd tools: `go install fyne.io/fyne/v2/cmd/fyne@latest`
+* Add `~/go/bin` to your `$PATH` environment variable if not done already: `export PATH=$PATH:~/go/bin/`
+* Clone Engram repository and navigate to its directory:
+
+```
+git clone https://github.com/DEROFDN/Engram.git
+cd Engram
+go mod tidy
+```
+
+#### Building for Windows
+
+* Build from within the repo directory:
+```
+fyne package -name Engram -os windows -appVersion 0.6.0 -icon Icon.png
+```
+
+#### Building for Android APK (Linux)
+
+* Install android-sdk: `sudo apt install android-sdk`
+* Download r26b android NDK - https://developer.android.com/ndk/downloads
+* Add environment variable for ANDROID_NDK_HOME to point at the downloaded and extracted ndk directory
+* Build from within the repo directory:
+```
+fyne package -name Engram -os android/arm64 -appVersion 0.6.0 -appID com.engram.main -icon ./Icon.png
+```
 
 ### Contributing
 

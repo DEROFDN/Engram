@@ -19,6 +19,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -38,6 +39,8 @@ func NewReturnEntry() *returnEntry {
 func (e *returnEntry) TypedKey(key *fyne.KeyEvent) {
 	switch key.Name {
 	case fyne.KeyReturn:
+		e.OnReturn()
+	case fyne.KeyEnter:
 		e.OnReturn()
 	default:
 		e.Entry.TypedKey(key)
@@ -206,4 +209,9 @@ func NewContextMenuButton(label string, image fyne.Resource, menu *fyne.Menu) *c
 	o.SetIcon(image)
 	o.ExtendBaseWidget(o)
 	return o
+}
+
+// NewVScroll places content in a VScroll container for mobile orientations and scrolling
+func NewVScroll(content *fyne.Container) *container.Scroll {
+	return container.NewVScroll(container.NewCenter(content, widget.NewLabel("")))
 }
