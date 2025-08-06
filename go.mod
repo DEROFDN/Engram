@@ -19,7 +19,7 @@ require (
 	mvdan.cc/xurls/v2 v2.4.0
 )
 
-replace github.com/deroproject/derohe => github.com/civilware/derohe v0.0.0-20240909003240-fa76d6016cc6
+replace github.com/deroproject/derohe => github.com/civilware/derohe v0.0.0-20250806224106-1ef9165bec24
 
 require (
 	fyne.io/systray v1.11.0 // indirect
