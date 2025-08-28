@@ -23,10 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
-	"io"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -186,6 +184,11 @@ type Cyberdeck struct {
 	}
 }
 
+type INDEXwithRatings struct {
+	ratings tela.Rating_Result
+	tela.INDEX
+}
+
 type Engram struct {
 	Disk *walletapi.Wallet_Disk
 }
@@ -297,9 +300,7 @@ func StartPulse() {
 			session.BalanceText = canvas.NewText("", colors.Blue)
 			session.StatusText = canvas.NewText("", colors.Blue)
 			status.Connection.FillColor = colors.Gray
-			status.Connection.Refresh()
 			status.Sync.FillColor = colors.Gray
-			status.Sync.Refresh()
 
 			go func() {
 				count := 0
@@ -320,13 +321,9 @@ func StartPulse() {
 							logger.Errorf("[Network] Failed to connect to: %s (%d / %d)\n", walletapi.Daemon_Endpoint, count, DEFAULT_DAEMON_RECONNECT_TIMEOUT)
 							walletapi.Connected = false
 							status.Connection.FillColor = colors.Red
-							status.Connection.Refresh()
 							status.Sync.FillColor = colors.Red
-							status.Sync.Refresh()
 							status.Gnomon.FillColor = colors.Red
-							status.Gnomon.Refresh()
 							status.EPOCH.FillColor = colors.Red
-							status.EPOCH.Refresh()
 							session.Offline = true
 
 							time.Sleep(time.Second)
@@ -344,7 +341,6 @@ func StartPulse() {
 							status.Connection.FillColor = colors.Red
 							status.Connection.Refresh()
 							status.Sync.FillColor = colors.Red
-							status.Sync.Refresh()
 						}
 
 						time.Sleep(time.Second)
@@ -355,80 +351,63 @@ func StartPulse() {
 
 						session.Balance, _ = engram.Disk.Get_Balance()
 						session.BalanceText.Text = globals.FormatMoney(session.Balance)
-						session.BalanceText.Refresh()
 						session.WalletHeight = engram.Disk.Get_Height()
 						session.DaemonHeight = engram.Disk.Get_Daemon_Height()
 						session.StatusText.Text = fmt.Sprintf("%d", session.WalletHeight)
-						session.StatusText.Refresh()
-
-						if session.LastBalance != session.Balance && session.Balance != 0 {
-							go convertBalance()
-						}
 
 						session.LastBalance = session.Balance
 
 						if walletapi.IsDaemonOnline() {
 							status.Connection.FillColor = colors.Green
-							status.Connection.Refresh()
 							if session.DaemonHeight > 0 && session.DaemonHeight-session.WalletHeight < 2 {
 								status.Connection.FillColor = colors.Green
-								status.Connection.Refresh()
 								status.Sync.FillColor = colors.Green
-								status.Sync.Refresh()
 							} else if session.DaemonHeight == 0 {
 								status.Sync.FillColor = colors.Red
-								status.Sync.Refresh()
 							} else {
 								status.Sync.FillColor = color.Transparent
-								status.Sync.Refresh()
 							}
 
 							if gnomon.Index != nil {
 								if gnomon.Index.Status == "indexed" {
 									status.Gnomon.FillColor = colors.Green
-									status.Gnomon.Refresh()
 								} else {
 									if uint64(gnomon.Index.LastIndexedHeight) < session.WalletHeight-15 {
 										status.Gnomon.FillColor = colors.Red
-										status.Gnomon.Refresh()
 									} else {
 										status.Gnomon.FillColor = color.Transparent
-										status.Gnomon.Refresh()
 									}
 								}
 							} else {
 								status.Gnomon.FillColor = colors.Gray
-								status.Gnomon.Refresh()
+
+								if gnomon.Index == nil && engram.Disk != nil {
+									enableGnomon, _ := getGnomon()
+									if enableGnomon == "1" {
+										startGnomon()
+									}
+								}
 							}
 
 							if epoch.IsActive() {
 								if epoch.IsProcessing() {
 									status.EPOCH.FillColor = color.Transparent
-									status.EPOCH.Refresh()
 								} else {
 									status.EPOCH.FillColor = colors.Green
-									status.EPOCH.Refresh()
 								}
 							} else {
 								if cyberdeck.EPOCH.err != nil {
 									status.EPOCH.FillColor = colors.Red
-									status.EPOCH.Refresh()
 								} else {
 									status.EPOCH.FillColor = colors.Gray
-									status.EPOCH.Refresh()
 								}
 							}
 						} else {
 							status.Connection.FillColor = colors.Gray
-							status.Connection.Refresh()
 							status.Sync.FillColor = colors.Gray
-							status.Sync.Refresh()
 							status.Cyberdeck.FillColor = colors.Gray
-							status.Cyberdeck.Refresh()
 							status.Gnomon.FillColor = colors.Gray
-							status.Gnomon.Refresh()
 							status.EPOCH.FillColor = colors.Gray
-							status.EPOCH.Refresh()
 							logger.Printf("[Network] Offline › Last Height: " + strconv.FormatUint(session.WalletHeight, 10) + " / " + strconv.FormatUint(session.DaemonHeight, 10) + "\n")
 						}
 
@@ -448,6 +427,16 @@ func StartPulse() {
 								sentNotifications = true
 							}
 						}
+
+						fyne.Do(func() {
+							session.BalanceText.Refresh()
+							session.StatusText.Refresh()
+							status.Connection.Refresh()
+							status.Sync.Refresh()
+							status.Cyberdeck.Refresh()
+							status.Gnomon.Refresh()
+							status.EPOCH.Refresh()
+						})
 
 						time.Sleep(time.Second)
 					}
@@ -725,11 +714,6 @@ func resizeWindow(width float32, height float32) {
 func closeWallet() {
 	showLoadingOverlay()
 
-	if gnomon.Index != nil {
-		logger.Printf("[Gnomon] Shutting down indexers...\n")
-		stopGnomon()
-	}
-
 	if engram.Disk != nil {
 		logger.Printf("[Engram] Shutting down wallet services...\n")
 		stopEPOCH()
@@ -744,6 +728,11 @@ func closeWallet() {
 		session.LastBalance = 0
 		engram.Disk = nil
 		tx = Transfers{}
+
+		if gnomon.Index != nil {
+			logger.Printf("[Gnomon] Shutting down indexers...\n")
+			stopGnomon()
+		}
 
 		if cyberdeck.RPC.server != nil {
 			cyberdeck.RPC.server.RPCServer_Stop()
@@ -1304,7 +1293,7 @@ func registerAccount() {
 		counter := 0
 		session.RegHashes = 0
 
-		for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		for i := 0; i < runtime.GOMAXPROCS(0)-1; i++ {
 			go func() {
 				for counter == 0 {
 					if engram.Disk == nil {
@@ -1329,9 +1318,13 @@ func registerAccount() {
 		if engram.Disk == nil {
 			session.Gif.Stop()
 			session.Gif = nil
-			resizeWindow(ui.MaxWidth, ui.MaxHeight)
-			session.Window.SetContent(layoutTransition())
-			session.Window.SetContent(layoutMain())
+
+			fyne.Do(func() {
+				resizeWindow(ui.MaxWidth, ui.MaxHeight)
+				session.Window.SetContent(layoutTransition())
+				session.Window.SetContent(layoutMain())
+			})
+
 			session.Domain = "app.main"
 			return
 		}
@@ -1344,18 +1337,25 @@ func registerAccount() {
 			session.Gif.Stop()
 			session.Gif = nil
 			logger.Errorf("[Registration] Error: %s\n", err)
-			resizeWindow(ui.MaxWidth, ui.MaxHeight)
-			session.Window.SetContent(layoutTransition())
-			session.Window.SetContent(layoutMain())
+
+			fyne.Do(func() {
+				resizeWindow(ui.MaxWidth, ui.MaxHeight)
+				session.Window.SetContent(layoutTransition())
+				session.Window.SetContent(layoutMain())
+			})
+
 			session.Domain = "app.main"
 		} else {
 			session.Gif.Stop()
 			session.Gif = nil
 			logger.Printf("[Registration] Registration transaction dispatched successfully.\n")
-			resizeWindow(ui.MaxWidth, ui.MaxHeight)
 			session.Domain = "app.wallet"
-			session.Window.SetContent(layoutTransition())
-			session.Window.SetContent(layoutDashboard())
+
+			fyne.Do(func() {
+				resizeWindow(ui.MaxWidth, ui.MaxHeight)
+				session.Window.SetContent(layoutTransition())
+				session.Window.SetContent(layoutDashboard())
+			})
 		}
 	}()
 }
@@ -2076,9 +2076,9 @@ func dvmInitFuncExample() string {
 10 IF EXISTS("owner") == 0 THEN GOTO 30
 20 RETURN 1
 30 STORE("owner", SIGNER())
-31 STORE("nameHdr", "")
-32 STORE("descrHdr", "")
-33 STORE("iconURLHdr", "")
+31 STORE("var_header_name", "")
+32 STORE("var_header_description", "")
+33 STORE("var_header_icon", "")
 40 RETURN 0
 End Function`
 }
@@ -2222,6 +2222,258 @@ func verificationOverlay(password bool, headerText, subText, dismiss string, cal
 	if password {
 		session.Window.Canvas().Focus(entryPassword)
 	}
+}
+
+// Color for the TELA likes ratio and individual rating numbers
+func telaRatingColor(r uint64) color.Color {
+	if r > 65 {
+		return colors.Green
+	} else if r > 32 {
+		return colors.Yellow
+	} else {
+		return colors.Red
+	}
+}
+
+// Color for the TELA average rating number hexagon
+func telaHexagonColor(r float64) fyne.Resource {
+	if r > 6.5 {
+		return resourceTelaHexagonGreen
+	} else if r > 3.2 {
+		return resourceTelaHexagonYellow
+	} else {
+		return resourceTelaHexagonRed
+	}
+}
+
+// Display ratings overview and the details of each rating for the TELA SCID
+func viewTELARatingsOverlay(name, scid string) (err error) {
+	rectWidth90 := canvas.NewRectangle(color.Transparent)
+	rectWidth90.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+	rectSpacer := canvas.NewRectangle(color.Transparent)
+	rectSpacer.SetMinSize(fyne.NewSize(10, 5))
+
+	header := canvas.NewText("TELA  RATINGS", colors.Gray)
+	header.TextSize = 16
+	header.Alignment = fyne.TextAlignCenter
+	header.TextStyle = fyne.TextStyle{Bold: true}
+
+	if len(name) > 30 {
+		name = fmt.Sprintf("%s...", name[0:30])
+	}
+
+	nameHdr := canvas.NewText(name, colors.Account)
+	nameHdr.Alignment = fyne.TextAlignCenter
+	nameHdr.TextStyle = fyne.TextStyle{Bold: true}
+
+	labelSCID := canvas.NewText("   SMART  CONTRACT  ID", colors.Gray)
+	labelSCID.TextSize = 14
+	labelSCID.Alignment = fyne.TextAlignLeading
+	labelSCID.TextStyle = fyne.TextStyle{Bold: true}
+
+	textSCID := widget.NewRichTextWithText(scid)
+	textSCID.Wrapping = fyne.TextWrapWord
+
+	textLikes := widget.NewRichTextFromMarkdown("Likes:")
+	textDislikes := widget.NewRichTextFromMarkdown("Dislikes:")
+	textAverage := widget.NewRichTextFromMarkdown("Average:")
+
+	ratingsBox := container.NewVBox(labelSCID, textSCID)
+
+	ratings, err := tela.GetRating(scid, session.Daemon, 0)
+	if err != nil {
+		removeOverlays()
+		logger.Errorf("[Engram] GetRating: %s\n", err)
+		err = fmt.Errorf("error could not get ratings")
+		return
+	}
+
+	removeOverlays()
+	overlay := session.Window.Canvas().Overlays()
+
+	ratingsBox.Add(container.NewHBox(textLikes, canvas.NewText(fmt.Sprintf("%d", ratings.Likes), colors.Green)))
+	ratingsBox.Add(container.NewHBox(textDislikes, canvas.NewText(fmt.Sprintf("%d", ratings.Dislikes), colors.Red)))
+	ratingsBox.Add(container.NewHBox(textAverage, canvas.NewText(fmt.Sprintf("%0.1f/10", ratings.Average), colors.Account)))
+
+	linkRate := widget.NewHyperlinkWithStyle("Rate SCID", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	linkRate.OnTapped = func() {
+		rateTELAOverlay(name, scid)
+	}
+	linkRate.Hide()
+
+	// Check if wallet has rated SCID
+	if gnomon.Index != nil {
+		ratingStore, _ := gnomon.GetSCIDValuesByKey(scid, engram.Disk.GetAddress().String())
+		if ratingStore == nil {
+			linkRate.Show()
+		}
+	}
+
+	linkBack := widget.NewHyperlinkWithStyle("Back to Application", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	linkBack.OnTapped = func() {
+		overlay.Top().Hide()
+		overlay.Remove(overlay.Top())
+		overlay.Remove(overlay.Top())
+	}
+
+	labelSeparator := widget.NewRichTextFromMarkdown("")
+	labelSeparator.Wrapping = fyne.TextWrapOff
+	labelSeparator.ParseMarkdown("---")
+	labelSeparator2 := widget.NewRichTextFromMarkdown("")
+	labelSeparator2.Wrapping = fyne.TextWrapOff
+	labelSeparator2.ParseMarkdown("---")
+
+	span := canvas.NewRectangle(color.Transparent)
+	span.SetMinSize(fyne.NewSize(ui.Width, 10))
+
+	userRatingsBox := container.NewVBox()
+
+	for _, r := range ratings.Ratings {
+		ratingString, err := tela.Ratings.ParseString(r.Rating)
+		if err != nil {
+			ratingString = fmt.Sprintf("%d", r.Rating)
+		}
+
+		labelSeparator := widget.NewRichTextFromMarkdown("")
+		labelSeparator.Wrapping = fyne.TextWrapOff
+		labelSeparator.ParseMarkdown("---")
+
+		labelAddress := widget.NewRichTextFromMarkdown(r.Address)
+		labelAddress.Wrapping = fyne.TextWrapWord
+
+		userRatingsBox.Add(
+			container.NewVBox(
+				labelAddress,
+				container.NewHBox(widget.NewRichTextFromMarkdown("Height:"), canvas.NewText(fmt.Sprintf("%d", r.Height), colors.Account)),
+				container.NewHBox(widget.NewRichTextFromMarkdown("Rating:"), canvas.NewText(fmt.Sprintf("%d", r.Rating), telaRatingColor(r.Rating))),
+				widget.NewRichTextFromMarkdown(ratingString),
+				labelSeparator,
+			),
+		)
+	}
+
+	userRatingsBoxScroll := container.NewVScroll(
+		container.NewHBox(
+			layout.NewSpacer(),
+			container.NewVBox(
+				ratingsBox,
+				rectWidth90,
+				container.NewHBox(
+					linkRate,
+					layout.NewSpacer(),
+				),
+				rectSpacer,
+				rectSpacer,
+				labelSeparator2,
+				rectSpacer,
+				rectSpacer,
+				userRatingsBox,
+			),
+			layout.NewSpacer(),
+		),
+	)
+	userRatingsBoxScroll.SetMinSize(fyne.NewSize(ui.Width*0.80, ui.Height*0.50))
+
+	overlayCont := container.NewVBox(
+		span,
+		container.NewCenter(
+			header,
+		),
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+		container.NewCenter(
+			nameHdr,
+		),
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+		labelSeparator,
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+		container.NewHBox(
+			layout.NewSpacer(),
+		),
+		userRatingsBoxScroll,
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+		rectSpacer,
+	)
+
+	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
+	menuLabel.TextSize = 11
+	menuLabel.Alignment = fyne.TextAlignCenter
+	menuLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	sep := canvas.NewRectangle(colors.Gray)
+	sep.SetMinSize(fyne.NewSize(ui.Width*0.2, 2))
+
+	line1 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	line2 := container.NewVBox(
+		layout.NewSpacer(),
+		sep,
+		layout.NewSpacer(),
+	)
+
+	bottom := container.NewStack(
+		container.NewVBox(
+			rectSpacer,
+			rectSpacer,
+			container.NewStack(
+				container.NewHBox(
+					layout.NewSpacer(),
+					line1,
+					layout.NewSpacer(),
+					menuLabel,
+					layout.NewSpacer(),
+					line2,
+					layout.NewSpacer(),
+				),
+			),
+			rectSpacer,
+			rectSpacer,
+			container.NewCenter(
+				layout.NewSpacer(),
+				linkBack,
+				layout.NewSpacer(),
+			),
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+			rectSpacer,
+		),
+	)
+
+	overlay.Add(
+		container.NewStack(
+			&iframe{},
+			canvas.NewRectangle(colors.DarkMatter),
+		),
+	)
+
+	overlay.Add(
+		container.NewStack(
+			&iframe{},
+			container.NewBorder(
+				nil,
+				bottom,
+				nil,
+				nil,
+				overlayCont,
+			),
+		),
+	)
+
+	return
 }
 
 // TELA smart contract rating overlay with password confirmation
@@ -2702,84 +2954,6 @@ func toggleRPCServer(port string) {
 	}
 }
 
-// Convert DERO value to USD (TODO: rework this and support other currencies)
-func convertBalance() (err error) {
-	if !session.Offline {
-		if session.BalanceUSDText == nil {
-			session.BalanceUSDText = canvas.NewText("", colors.Gray)
-		}
-
-		check, _ := engram.Disk.Get_Balance()
-		if check == 0 {
-			session.BalanceUSDText.Text = "USD  0.00"
-			session.BalanceUSDText.Refresh()
-			return
-		}
-
-		url := "https://api.coingecko.com/api/v3/simple/price?ids=dero&vs_currencies=usd"
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			logger.Errorf("[Engram] GET: %s\n", err)
-			session.BalanceUSDText.Text = ""
-			session.BalanceUSDText.Refresh()
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			logger.Errorf("[Engram] Value conversion error: %s\n", err)
-			session.BalanceUSDText.Text = ""
-			session.BalanceUSDText.Refresh()
-			return err
-		}
-		defer resp.Body.Close()
-
-		var resData map[string]interface{}
-		responseData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			logger.Errorf("[Engram] Value conversion error: %s\n", err)
-			return err
-		}
-
-		err = json.Unmarshal(responseData, &resData)
-		if err != nil {
-			logger.Errorf("[Engram] Value conversion error: %s\n", err)
-			session.BalanceUSDText.Text = ""
-			session.BalanceUSDText.Refresh()
-			return err
-		}
-
-		defer resp.Body.Close()
-
-		if resData["dero"] == nil {
-			err = errors.New("error: could not query price from coingecko")
-			session.BalanceUSDText.Text = ""
-			session.BalanceUSDText.Refresh()
-			return err
-		}
-
-		node := resData["dero"].(map[string]interface{})
-		result := fmt.Sprintf("%.2f", node["usd"])
-		f, _ := strconv.ParseFloat(result, 64)
-		tmp, _ := engram.Disk.Get_Balance()
-		bal := fmt.Sprintf("%d", tmp)
-		b, _ := strconv.ParseFloat(bal, 64)
-		usd := (f / 100000) * b
-		formatted := fmt.Sprintf("%.2f", usd)
-		session.BalanceUSD = formatted
-		session.BalanceUSDText.Text = "USD  " + formatted
-		session.BalanceUSDText.Refresh()
-		logger.Printf("[Engram] Value conversion updated.\n")
-	} else {
-		session.BalanceUSD = "-.--"
-		session.BalanceUSDText.Text = "USD  " + "-.--"
-		session.BalanceUSDText.Refresh()
-	}
-
-	return
-}
-
 // Get the latest smart contract header data (must follow the standard here: https://github.com/civilware/artificer-nfa-standard/blob/main/Headers/README.md)
 func getContractHeader(scid crypto.Hash) (name string, desc string, icon string, owner string, code string) {
 	var headerData []*structures.SCIDVariable
@@ -2806,17 +2980,26 @@ func getContractHeader(scid crypto.Hash) (name string, desc string, icon string,
 	for _, h := range headerData {
 		switch key := h.Key.(type) {
 		case string:
-			if key == "nameHdr" {
+			if key == "var_header_name" {
+				found = true
+				name = h.Value.(string)
+			} else if name == "" && key == "nameHdr" {
 				found = true
 				name = h.Value.(string)
 			}
 
-			if key == "descrHdr" {
+			if key == "var_header_description" {
+				found = true
+				desc = h.Value.(string)
+			} else if desc == "" && key == "descrHdr" {
 				found = true
 				desc = h.Value.(string)
 			}
 
-			if key == "iconURLHdr" {
+			if key == "var_header_icon" {
+				found = true
+				icon = h.Value.(string)
+			} else if icon == "" && key == "iconURLHdr" {
 				found = true
 				icon = h.Value.(string)
 			}
@@ -3979,6 +4162,16 @@ func AskPermissionForRequestE(headerText string, params interface{}) (choice xsw
 			err = fmt.Errorf("denied TELA link request %s: %s", p.TelaLink, err)
 			return
 		}
+	case string:
+		switch p {
+		case "TELA R OFF":
+			paramString = "You will be viewing all TELA content as per your TELA settings.\n\n"
+			paramString += "Min Likes will omit results if they are below the set likes ratio.\n\n"
+			paramString += "Search exclusions will omit results that include the set exclusion text in their dURL."
+		default:
+			err = fmt.Errorf("unknown Engram request param string: %s", p)
+			return
+		}
 	default:
 		err = fmt.Errorf("unknown Engram request params: %T", p)
 		return
@@ -4159,7 +4352,7 @@ func telaErrorToString(err error) string {
 }
 
 // Get the ratio of likes for a TELA SCID, if ratio < minLines an error will be returned
-func getLikesRatio(scid, dURL, searchExclusions string, minLikes float64) (ratio float64, err error) {
+func getLikesRatio(scid, dURL, searchExclusions string, minLikes float64) (ratio float64, ratings tela.Rating_Result, err error) {
 	if gnomon.Index == nil {
 		err = fmt.Errorf("gnomon is not online")
 		return
@@ -4181,6 +4374,9 @@ func getLikesRatio(scid, dURL, searchExclusions string, minLikes float64) (ratio
 		err = fmt.Errorf("could not get %s dislikes", scid)
 		return
 	}
+
+	ratings.Likes = up[0]
+	ratings.Dislikes = down[0]
 
 	total := float64(up[0] + down[0])
 	if total == 0 {
@@ -4210,10 +4406,25 @@ func telaFilterSearchExclusions(dURL, searchExclusions string) (err error) {
 }
 
 // Sort and return search display strings for list widget
-func telaSearchDisplayAll(telaSearch []tela.INDEX) (display []string) {
-	sort.Slice(telaSearch, func(i, j int) bool {
-		return telaSearch[i].NameHdr < telaSearch[j].NameHdr
-	})
+func telaSearchDisplayAll(telaSearch []INDEXwithRatings, sortBy string) (display []string) {
+	switch sortBy {
+	case "Z-A":
+		sort.Slice(telaSearch, func(i, j int) bool {
+			return telaSearch[i].NameHdr > telaSearch[j].NameHdr
+		})
+	case "A-Z":
+		sort.Slice(telaSearch, func(i, j int) bool {
+			return telaSearch[i].NameHdr < telaSearch[j].NameHdr
+		})
+	default: // Ratings
+		sort.Slice(telaSearch, func(i, j int) bool {
+			if telaSearch[i].ratings.Likes != telaSearch[j].ratings.Likes {
+				return telaSearch[i].ratings.Likes > telaSearch[j].ratings.Likes
+			}
+
+			return telaSearch[i].ratings.Dislikes < telaSearch[j].ratings.Dislikes
+		})
+	}
 
 	for _, ind := range telaSearch {
 		display = append(display, ind.NameHdr+";;;"+ind.SCID)
@@ -4222,9 +4433,30 @@ func telaSearchDisplayAll(telaSearch []tela.INDEX) (display []string) {
 	return
 }
 
-// Return a display string for list widget
-func telaSearchDisplay(index tela.INDEX) (display string) {
-	display = index.NameHdr + ";;;" + index.SCID
+// Validate the URL as URI or SC image and return it as a canvas.Image
+func handleImageURL(nameHdr, imageURL string, size fyne.Size) (image *canvas.Image, err error) {
+	scImage, err := tela.ValidateImageURL(imageURL, session.Daemon)
+	if err != nil {
+		return
+	}
+
+	var resource fyne.Resource
+	image = canvas.NewImageFromResource(nil)
+
+	if scImage != "" {
+		resource = fyne.NewStaticResource(nameHdr, []byte(scImage))
+	} else {
+		resource, err = fyne.LoadResourceFromURLString(imageURL)
+		if err != nil {
+			return
+		}
+	}
+
+	image.Resource = resource
+	image.SetMinSize(size)
+	image.FillMode = canvas.ImageFillContain
+	image.Refresh()
+
 	return
 }
 

@@ -140,9 +140,8 @@ func main() {
 	status.EPOCH.Refresh()
 
 	fmt.Printf("Engram v%s (Beta)\n", version)
-	fmt.Printf("Copyright 2023-2024 DERO Foundation. All rights reserved.\n")
+	fmt.Printf("Copyright 2023-2025 DERO Foundation. All rights reserved.\n")
 	fmt.Printf("OS: %s ARCH: %s GOMAXPROCS: %d\n\n", runtime.GOOS, runtime.GOARCH, runtime.GOMAXPROCS(0))
-	fmt.Printf("\"Insist on yourself; never imitate. Your own gift you can present every moment with the \ncumulative force of a whole life's cultivation; but of the adopted talent of another, \nyou have only an extemporaneous, half possession.\"\n\n")
 
 	// Map arguments for DERO network (TODO: Fully support console arguments)
 	globals.Arguments = make(map[string]interface{})

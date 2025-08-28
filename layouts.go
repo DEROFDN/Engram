@@ -200,7 +200,7 @@ func layoutMain() fyne.CanvasObject {
 		}
 	}
 
-	footer := canvas.NewText("© 2024  DERO FOUNDATION  |  VERSION  "+version.String(), colors.Gray)
+	footer := canvas.NewText("© 2025  DERO FOUNDATION  |  VERSION  "+version.String(), colors.Gray)
 	footer.TextSize = 10
 	footer.Alignment = fyne.TextAlignCenter
 	footer.TextStyle = fyne.TextStyle{Bold: true}
@@ -389,16 +389,6 @@ func layoutDashboard() fyne.CanvasObject {
 	session.BalanceText.TextSize = 28
 	session.BalanceText.TextStyle = fyne.TextStyle{Bold: true}
 
-	if session.BalanceUSD == "" {
-		session.BalanceUSDText = canvas.NewText("", colors.Gray)
-		session.BalanceUSDText.TextSize = 14
-		session.BalanceUSDText.TextStyle = fyne.TextStyle{Bold: true}
-	} else {
-		session.BalanceUSDText = canvas.NewText("USD  "+session.BalanceUSD, colors.Gray)
-		session.BalanceUSDText.TextSize = 14
-		session.BalanceUSDText.TextStyle = fyne.TextStyle{Bold: true}
-	}
-
 	network := ""
 	switch session.Network {
 	case NETWORK_TESTNET:
@@ -415,13 +405,8 @@ func layoutDashboard() fyne.CanvasObject {
 	frame := &iframe{}
 
 	balanceCenter := container.NewCenter(
-		container.NewVBox(
-			container.NewCenter(
-				session.BalanceText,
-			),
-			container.NewCenter(
-				session.BalanceUSDText,
-			),
+		container.NewCenter(
+			session.BalanceText,
 		),
 	)
 
@@ -509,7 +494,12 @@ func layoutDashboard() fyne.CanvasObject {
 	animationCanvas := canvas.NewCircle(color.Transparent)
 
 	if !session.Offline {
-		daemonLabel.Text = session.Daemon
+		if len(session.Daemon) > 30 {
+			daemonLabel.Text = "..." + session.Daemon[len(session.Daemon)-27:]
+		} else {
+			daemonLabel.Text = session.Daemon
+		}
+
 		animationStatus := canvas.NewColorRGBAAnimation(
 			color.Transparent,
 			colors.Yellow,
@@ -1340,7 +1330,7 @@ func layoutServiceAddress() fyne.CanvasObject {
 				}
 
 				btnCopy.OnTapped = func() {
-					session.Window.Clipboard().SetContent(address.String())
+					a.Clipboard().SetContent(address.String())
 				}
 
 				linkClose := widget.NewHyperlinkWithStyle("Go Back", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
@@ -1789,11 +1779,11 @@ func layoutNewAccount() fyne.CanvasObject {
 		}
 
 		btnCopySeed.OnTapped = func() {
-			session.Window.Clipboard().SetContent(seed)
+			a.Clipboard().SetContent(seed)
 		}
 
 		btnCopyAddress.OnTapped = func() {
-			session.Window.Clipboard().SetContent(address)
+			a.Clipboard().SetContent(address)
 		}
 
 		form.Hide()
@@ -2030,10 +2020,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word1.OnFocusGained = func() {
 		offset := word1.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word2 := NewMobileEntry()
@@ -2062,10 +2050,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word2.OnFocusGained = func() {
 		offset := word2.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word3 := NewMobileEntry()
@@ -2094,10 +2080,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word3.OnFocusGained = func() {
 		offset := word3.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word4 := NewMobileEntry()
@@ -2126,10 +2110,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word4.OnFocusGained = func() {
 		offset := word4.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word5 := NewMobileEntry()
@@ -2158,10 +2140,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word5.OnFocusGained = func() {
 		offset := word5.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word6 := NewMobileEntry()
@@ -2190,13 +2170,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word6.OnFocusGained = func() {
 		offset := word6.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			logger.Debugf("[Engram] scrollBox - before: %f\n", scrollBox.Offset.Y)
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-			logger.Debugf("[Engram] scrollBox - after: %f\n", scrollBox.Offset.Y)
-		}
-		logger.Debugf("[Engram] offset: %f\n", offset)
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word7 := NewMobileEntry()
@@ -2225,13 +2200,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word7.OnFocusGained = func() {
 		offset := word7.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			logger.Debugf("[Engram] scrollBox - before: %f\n", scrollBox.Offset.Y)
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-			logger.Debugf("[Engram] scrollBox - after: %f\n", scrollBox.Offset.Y)
-		}
-		logger.Debugf("[Engram] offset: %f\n", offset)
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word8 := NewMobileEntry()
@@ -2260,10 +2230,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word8.OnFocusGained = func() {
 		offset := word8.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word9 := NewMobileEntry()
@@ -2292,10 +2260,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word9.OnFocusGained = func() {
 		offset := word9.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word10 := NewMobileEntry()
@@ -2324,10 +2290,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word10.OnFocusGained = func() {
 		offset := word10.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word11 := NewMobileEntry()
@@ -2356,10 +2320,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word11.OnFocusGained = func() {
 		offset := word11.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word12 := NewMobileEntry()
@@ -2388,10 +2350,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word12.OnFocusGained = func() {
 		offset := word12.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word13 := NewMobileEntry()
@@ -2420,10 +2380,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word13.OnFocusGained = func() {
 		offset := word13.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word14 := NewMobileEntry()
@@ -2452,10 +2410,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word14.OnFocusGained = func() {
 		offset := word14.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word15 := NewMobileEntry()
@@ -2484,10 +2440,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word15.OnFocusGained = func() {
 		offset := word15.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word16 := NewMobileEntry()
@@ -2516,10 +2470,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word16.OnFocusGained = func() {
 		offset := word16.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word17 := NewMobileEntry()
@@ -2548,10 +2500,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word17.OnFocusGained = func() {
 		offset := word17.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word18 := NewMobileEntry()
@@ -2580,10 +2530,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word18.OnFocusGained = func() {
 		offset := word18.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word19 := NewMobileEntry()
@@ -2612,10 +2560,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word19.OnFocusGained = func() {
 		offset := word19.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word20 := NewMobileEntry()
@@ -2644,10 +2590,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word20.OnFocusGained = func() {
 		offset := word20.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word21 := NewMobileEntry()
@@ -2676,10 +2620,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word21.OnFocusGained = func() {
 		offset := word21.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word22 := NewMobileEntry()
@@ -2708,10 +2650,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word22.OnFocusGained = func() {
 		offset := word22.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word23 := NewMobileEntry()
@@ -2740,10 +2680,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word23.OnFocusGained = func() {
 		offset := word23.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word24 := NewMobileEntry()
@@ -2772,10 +2710,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word24.OnFocusGained = func() {
 		offset := word24.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	word25 := NewMobileEntry()
@@ -2804,12 +2740,8 @@ func layoutRestore() fyne.CanvasObject {
 	}
 	word25.OnFocusGained = func() {
 		offset := word25.Position().Y
-		if offset-scrollBox.Offset.Y > scrollBox.MinSize().Height {
-			logger.Debugf("[Engram] scrollBox - before: %f\n", scrollBox.Offset.Y)
-			scrollBox.Offset = fyne.NewPos(0, offset)
-			scrollBox.Refresh()
-			logger.Debugf("[Engram] scrollBox - after: %f\n", scrollBox.Offset.Y)
-		}
+		scrollBox.Offset.Y = offset + 10
+		scrollBox.Refresh()
 	}
 
 	hexEntry := widget.NewEntry()
@@ -3257,7 +3189,7 @@ func layoutRestore() fyne.CanvasObject {
 		address := engram.Disk.GetAddress().String()
 
 		btnCopyAddress.OnTapped = func() {
-			session.Window.Clipboard().SetContent(address)
+			a.Clipboard().SetContent(address)
 		}
 
 		engram.Disk.Get_Balance_Rescan()
@@ -3606,14 +3538,21 @@ func layoutAssetExplorer() fyne.CanvasObject {
 				entrySCID.Disable()
 				results.Text = "  Gnomon is syncing..."
 				results.Color = colors.Yellow
-				results.Refresh()
+
+				fyne.Do(func() {
+					results.Refresh()
+				})
+
 				time.Sleep(time.Second * 1)
 			}
 
-			entrySCID.Enable()
-			results.Text = "  Loading previous scan history..."
-			results.Color = colors.Yellow
-			results.Refresh()
+			fyne.Do(func() {
+				entrySCID.Enable()
+				results.Text = "  Loading previous scan history..."
+				results.Color = colors.Yellow
+
+				results.Refresh()
+			})
 
 			shard, err := GetShard()
 			if err != nil {
@@ -3672,7 +3611,6 @@ func layoutAssetExplorer() fyne.CanvasObject {
 
 		results.Text = fmt.Sprintf("  Search History:  %d", found)
 		results.Color = colors.Green
-		results.Refresh()
 
 		listData.Set(assetData)
 
@@ -3701,7 +3639,11 @@ func layoutAssetExplorer() fyne.CanvasObject {
 			session.Window.SetContent(layoutTransition())
 			session.Window.SetContent(layoutAssetManager(split[4]))
 		}
-		listBox.Refresh()
+
+		fyne.Do(func() {
+			results.Refresh()
+			listBox.Refresh()
+		})
 	}()
 
 	top := container.NewVBox(
@@ -3904,9 +3846,13 @@ func layoutMyAssets() fyne.CanvasObject {
 	go func() {
 		if engram.Disk != nil && gnomon.Index != nil {
 			if gnomon.Index.LastIndexedHeight < int64(engram.Disk.Get_Daemon_Height()) {
-				btnRescan.Disable()
+				fyne.Do(func() {
+					btnRescan.Disable()
+				})
 			} else {
-				btnRescan.Enable()
+				fyne.Do(func() {
+					btnRescan.Enable()
+				})
 			}
 
 			results.Text = "  Gathering an index of smart contracts... "
@@ -3916,13 +3862,20 @@ func layoutMyAssets() fyne.CanvasObject {
 			for gnomon.Index.LastIndexedHeight < int64(engram.Disk.Get_Daemon_Height()) {
 				results.Text = fmt.Sprintf("  Gnomon is syncing... [%d / %d]", gnomon.Index.LastIndexedHeight, int64(engram.Disk.Get_Daemon_Height()))
 				results.Color = colors.Yellow
-				results.Refresh()
+
+				fyne.Do(func() {
+					results.Refresh()
+				})
+
 				time.Sleep(time.Second * 1)
 			}
 
 			results.Text = "  Loading previous scan results..."
 			results.Color = colors.Yellow
-			results.Refresh()
+
+			fyne.Do(func() {
+				results.Refresh()
+			})
 
 			var assetList map[string]string
 			var zerobal uint64
@@ -3985,7 +3938,9 @@ func layoutMyAssets() fyne.CanvasObject {
 			}
 
 			rescan := func() {
-				btnRescan.Disable()
+				fyne.Do(func() {
+					btnRescan.Disable()
+				})
 				assetTotal = 0
 				assetCount = 0
 
@@ -3995,7 +3950,10 @@ func layoutMyAssets() fyne.CanvasObject {
 
 				results.Text = "  Indexing..."
 				results.Color = colors.Yellow
-				results.Refresh()
+
+				fyne.Do(func() {
+					results.Refresh()
+				})
 
 				owned = 0
 
@@ -4026,7 +3984,10 @@ func layoutMyAssets() fyne.CanvasObject {
 
 				results.Text = "  Scanning results..."
 				results.Color = colors.Yellow
-				results.Refresh()
+
+				fyne.Do(func() {
+					results.Refresh()
+				})
 
 				if gnomon.Index != nil {
 					switch gnomon.Index.DBType {
@@ -4075,7 +4036,10 @@ func layoutMyAssets() fyne.CanvasObject {
 
 						results.Text = "  Scanning... " + fmt.Sprintf("%d / %d", assetTotal, assetCount)
 						results.Color = colors.Yellow
-						results.Refresh()
+
+						fyne.Do(func() {
+							results.Refresh()
+						})
 
 						bal, _, err := engram.Disk.GetDecryptedBalanceAtTopoHeight(scid, -1, engram.Disk.GetAddress().String())
 						if err != nil {
@@ -4126,17 +4090,22 @@ func layoutMyAssets() fyne.CanvasObject {
 
 				results.Text = fmt.Sprintf("  Owned Assets:  %d", owned)
 				results.Color = colors.Green
-				results.Refresh()
 
 				labelLastScan.Text = fmt.Sprintf("  %s", timeNow)
 				labelLastScan.Color = colors.Green
-				labelLastScan.Refresh()
 
 				listData.Set(assetData)
-				btnRescan.Enable()
+				fyne.Do(func() {
+					btnRescan.Enable()
+
+					results.Refresh()
+					labelLastScan.Refresh()
+				})
 			}
 
-			btnRescan.OnTapped = rescan
+			btnRescan.OnTapped = func() {
+				go rescan()
+			}
 
 			lastScan, _ := GetEncryptedValue("Asset Scan", []byte("Last Scan"))
 
@@ -4153,9 +4122,11 @@ func layoutMyAssets() fyne.CanvasObject {
 			}
 
 			results.Color = colors.Green
-			results.Refresh()
 
-			labelLastScan.Refresh()
+			fyne.Do(func() {
+				results.Refresh()
+				labelLastScan.Refresh()
+			})
 
 			listData.Set(assetData)
 
@@ -4185,8 +4156,12 @@ func layoutMyAssets() fyne.CanvasObject {
 				session.Window.SetContent(layoutTransition())
 				session.Window.SetContent(layoutAssetManager(split[4]))
 			}
-			listBox.Refresh()
-			btnRescan.Enable()
+
+			fyne.Do(func() {
+				listBox.Refresh()
+
+				btnRescan.Enable()
+			})
 		}
 	}()
 
@@ -4345,6 +4320,18 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 	hash := crypto.HashHexToHash(scid)
 	name, desc, icon, owner, code := getContractHeader(hash)
 
+	image := canvas.NewImageFromResource(resourceBlankPng)
+	image.SetMinSize(fyne.NewSize(ui.Width*0.3, ui.Width*0.3))
+	image.FillMode = canvas.ImageFillContain
+
+	if icon != "" {
+		if img, err := handleImageURL(name, icon, fyne.NewSize(ui.Width*0.3, ui.Width*0.3)); err == nil {
+			image = img
+		} else {
+			logger.Errorf("[Engram] Could not validate icon image: %s\n", err)
+		}
+	}
+
 	if owner == "" {
 		owner = "--"
 	}
@@ -4382,9 +4369,19 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 	labelSeparator6.Wrapping = fyne.TextWrapOff
 	labelSeparator6.ParseMarkdown("---")
 
-	labelName := widget.NewRichTextFromMarkdown(name)
-	labelName.Wrapping = fyne.TextWrapOff
-	labelName.ParseMarkdown("## " + name)
+	if name == "" {
+		name = "--"
+	}
+
+	labelName := widget.NewRichText(&widget.TextSegment{
+		Text: name,
+		Style: widget.RichTextStyle{
+			Alignment: fyne.TextAlignCenter,
+			ColorName: theme.ColorNameForeground,
+			SizeName:  theme.SizeNameHeadingText,
+			TextStyle: fyne.TextStyle{Bold: true},
+		}})
+	labelName.Wrapping = fyne.TextWrapWord
 
 	labelDesc := widget.NewRichText(&widget.TextSegment{
 		Text: desc,
@@ -4588,7 +4585,7 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 		session.LastDomain = capture
 	}
 
-	image := canvas.NewImageFromResource(resourceBlankPng)
+	image = canvas.NewImageFromResource(resourceBlankPng)
 	image.SetMinSize(fyne.NewSize(ui.Width*0.3, ui.Width*0.3))
 	image.FillMode = canvas.ImageFillContain
 
@@ -4632,12 +4629,12 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 
 	linkCopySigner := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	linkCopySigner.OnTapped = func() {
-		session.Window.Clipboard().SetContent(signer)
+		a.Clipboard().SetContent(signer)
 	}
 
 	linkCopyOwner := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	linkCopyOwner.OnTapped = func() {
-		session.Window.Clipboard().SetContent(owner)
+		a.Clipboard().SetContent(owner)
 	}
 
 	linkMessageAuthor := widget.NewHyperlinkWithStyle("Message the Author", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
@@ -4662,16 +4659,16 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 
 	linkCopySCID := widget.NewHyperlinkWithStyle("Copy SCID", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	linkCopySCID.OnTapped = func() {
-		session.Window.Clipboard().SetContent(scid)
+		a.Clipboard().SetContent(scid)
 	}
 
 	linkView := widget.NewHyperlinkWithStyle("View in Explorer", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	linkView.OnTapped = func() {
 		if engram.Disk.GetNetwork() {
-			link, _ := url.Parse("https://explorer.dero.io/tx/" + scid)
+			link, _ := url.Parse("https://explorer.derofoundation.org/tx/" + scid)
 			_ = fyne.CurrentApp().OpenURL(link)
 		} else {
-			link, _ := url.Parse("https://testnetexplorer.dero.io/tx/" + scid)
+			link, _ := url.Parse("https://testnetexplorer.derofoundation.org/tx/" + scid)
 			_ = fyne.CurrentApp().OpenURL(link)
 		}
 	}
@@ -5059,10 +5056,14 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 							layout.NewSpacer(),
 						),
 						rectSpacer,
+
 						rectSpacer,
 						container.NewHBox(
 							layout.NewSpacer(),
-							labelName,
+							container.NewStack(
+								rectWidth90,
+								labelName,
+							),
 							layout.NewSpacer(),
 						),
 						container.NewHBox(
@@ -5126,6 +5127,15 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 						),
 						rectSpacer,
 						rectSpacer,
+						labelSeparator6,
+						rectSpacer,
+						rectSpacer,
+						labelExecute,
+						rectSpacer,
+						rectSpacer,
+						functionList,
+						rectSpacer,
+						rectSpacer,
 						labelSeparator4,
 						rectSpacer,
 						rectSpacer,
@@ -5148,14 +5158,6 @@ func layoutAssetManager(scid string) fyne.CanvasObject {
 						entryAmount,
 						rectSpacer,
 						btnSend,
-						rectSpacer,
-						rectSpacer,
-						labelSeparator6,
-						rectSpacer,
-						rectSpacer,
-						labelExecute,
-						rectSpacer,
-						functionList,
 						wSpacer,
 					),
 					layout.NewSpacer(),
@@ -6009,7 +6011,7 @@ func layoutSettings() fyne.CanvasObject {
 	selectNodes.PlaceHolder = "Select Public Node ..."
 	switch session.Network {
 	case NETWORK_TESTNET:
-		selectNodes.Options = []string{"testnetexplorer.dero.io:40402", "127.0.0.1:40402"}
+		selectNodes.Options = []string{"testnetexplorer.derofoundation.org:40402", "127.0.0.1:40402"}
 	case NETWORK_SIMULATOR:
 		selectNodes.Options = []string{"127.0.0.1:20000"}
 		selectNodes.PlaceHolder = "Select Simulator Node ..."
@@ -6060,7 +6062,7 @@ func layoutSettings() fyne.CanvasObject {
 	radioNetwork.OnChanged = func(s string) {
 		if s == NETWORK_TESTNET {
 			setNetwork(s)
-			selectNodes.Options = []string{"testnetexplorer.dero.io:40402", "127.0.0.1:40402"}
+			selectNodes.Options = []string{"testnetexplorer.derofoundation.org:40402", "127.0.0.1:40402"}
 			selectNodes.PlaceHolder = "Select Public Node ..."
 		} else if s == NETWORK_SIMULATOR {
 			setNetwork(s)
@@ -7394,7 +7396,7 @@ func layoutCyberdeck() fyne.CanvasObject {
 
 	linkCopy := widget.NewHyperlinkWithStyle("Copy Credentials", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkCopy.OnTapped = func() {
-		session.Window.Clipboard().SetContent(cyberdeck.RPC.user + ":" + cyberdeck.RPC.pass)
+		a.Clipboard().SetContent(cyberdeck.RPC.user + ":" + cyberdeck.RPC.pass)
 	}
 
 	linkPermissions := widget.NewHyperlinkWithStyle("Settings", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
@@ -7660,11 +7662,23 @@ func layoutXSWDAppManager(ad *xswd.ApplicationData) fyne.CanvasObject {
 	rectSpacer := canvas.NewRectangle(color.Transparent)
 	rectSpacer.SetMinSize(fyne.NewSize(6, 5))
 
-	labelName := widget.NewRichTextFromMarkdown(ad.Name)
-	labelName.Wrapping = fyne.TextWrapOff
-	labelName.ParseMarkdown("## " + ad.Name)
+	labelName := widget.NewRichText(&widget.TextSegment{
+		Text: ad.Name,
+		Style: widget.RichTextStyle{
+			Alignment: fyne.TextAlignCenter,
+			ColorName: theme.ColorNameForeground,
+			SizeName:  theme.SizeNameHeadingText,
+			TextStyle: fyne.TextStyle{Bold: true},
+		}})
+	labelName.Wrapping = fyne.TextWrapWord
 
-	labelDesc := widget.NewRichTextFromMarkdown(ad.Description)
+	labelDesc := widget.NewRichText(&widget.TextSegment{
+		Text: ad.Description,
+		Style: widget.RichTextStyle{
+			Alignment: fyne.TextAlignCenter,
+			ColorName: theme.ColorNameForeground,
+			TextStyle: fyne.TextStyle{Bold: false},
+		}})
 	labelDesc.Wrapping = fyne.TextWrapWord
 
 	labelID := canvas.NewText("   APP  ID", colors.Gray)
@@ -7822,30 +7836,27 @@ func layoutXSWDAppManager(ad *xswd.ApplicationData) fyne.CanvasObject {
 	}
 
 	image := canvas.NewImageFromResource(resourceWebsocketPng)
-	image.SetMinSize(fyne.NewSize(ui.Width*0.15, ui.Width*0.15))
+	image.SetMinSize(fyne.NewSize(ui.Width*0.25, ui.Width*0.25))
 	image.FillMode = canvas.ImageFillContain
 
-	// if icon != "" {
-	// 	var path fyne.Resource
-	// 	path, err = fyne.LoadResourceFromURLString(icon)
-	// 	if err != nil {
-	// 		image.Resource = resourceBlockGrayPng
-	// 	} else {
-	// 		image.Resource = path
-	// 	}
+	// Check if the application is TELA
+	telaURL := "http://localhost"
+	if strings.HasPrefix(ad.Url, telaURL) {
+		for _, serv := range tela.GetServerInfo() {
+			if strings.HasPrefix(ad.Url, telaURL+serv.Address) {
+				name, _, icon, _, _ := getContractHeader(crypto.HashHexToHash(serv.SCID))
+				if icon != "" {
+					if img, err := handleImageURL(name, icon, fyne.NewSize(ui.Width*0.25, ui.Width*0.25)); err == nil {
+						image = img
+					} else {
+						logger.Errorf("[Engram] Could not validate icon image: %s\n", err)
+					}
+				}
 
-	// 	image.SetMinSize(fyne.NewSize(ui.Width*0.2, ui.Width*0.2))
-	// 	image.FillMode = canvas.ImageFillContain
-	// 	image.Refresh()
-	// }
-
-	// if name == "" {
-	// 	labelName.ParseMarkdown("## No name provided")
-	// }
-
-	// if desc == "" {
-	// 	labelDesc.ParseMarkdown("No description provided")
-	// }
+				break
+			}
+		}
+	}
 
 	linkURL := widget.NewHyperlinkWithStyle("Open in browser", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	linkURL.OnTapped = func() {
@@ -7877,17 +7888,19 @@ func layoutXSWDAppManager(ad *xswd.ApplicationData) fyne.CanvasObject {
 					layout.NewSpacer(),
 					container.NewVBox(
 						container.NewHBox(
+							layout.NewSpacer(),
 							image,
-							rectSpacer,
-							container.NewVBox(
-								layout.NewSpacer(),
-								labelName,
-								layout.NewSpacer(),
-							),
 							layout.NewSpacer(),
 						),
 						rectSpacer,
-						rectSpacer,
+						container.NewHBox(
+							layout.NewSpacer(),
+							container.NewStack(
+								rectWidth90,
+								labelName,
+							),
+							layout.NewSpacer(),
+						),
 						labelDesc,
 						rectSpacer,
 						rectSpacer,
@@ -9546,7 +9559,6 @@ func layoutHistory() fyne.CanvasObject {
 					}
 
 					results.Text = fmt.Sprintf("  Results:  %d", count)
-					results.Refresh()
 
 					listData.Set(data)
 
@@ -9573,8 +9585,12 @@ func layoutHistory() fyne.CanvasObject {
 						overlay.Add(layoutHistoryDetail(split[4]))
 						listBox.UnselectAll()
 					}
-					listBox.Refresh()
-					listBox.ScrollToBottom()
+
+					fyne.Do(func() {
+						results.Refresh()
+						listBox.Refresh()
+						listBox.ScrollToBottom()
+					})
 				}()
 			} else {
 				results.Text = fmt.Sprintf("  Results:  %d", count)
@@ -9612,19 +9628,25 @@ func layoutHistory() fyne.CanvasObject {
 					}
 
 					results.Text = fmt.Sprintf("  Results:  %d", count)
-					results.Refresh()
 
 					listData.Set(data)
 
 					listBox.OnSelected = func(id widget.ListItemID) {
 						listBox.UnselectAll()
 					}
-					listBox.Refresh()
-					listBox.ScrollToBottom()
+
+					fyne.Do(func() {
+						results.Refresh()
+						listBox.Refresh()
+						listBox.ScrollToBottom()
+					})
 				}()
 			} else {
 				results.Text = fmt.Sprintf("  Results:  %d", count)
-				results.Refresh()
+
+				fyne.Do(func() {
+					results.Refresh()
+				})
 			}
 		case "Messages":
 			listBox.UnselectAll()
@@ -9678,7 +9700,6 @@ func layoutHistory() fyne.CanvasObject {
 					}
 
 					results.Text = fmt.Sprintf("  Results:  %d", count)
-					results.Refresh()
 
 					listData.Set(data)
 
@@ -9696,12 +9717,18 @@ func layoutHistory() fyne.CanvasObject {
 						listBox.Refresh()
 					}
 
-					listBox.Refresh()
-					listBox.ScrollToBottom()
+					fyne.Do(func() {
+						results.Refresh()
+						listBox.Refresh()
+						listBox.ScrollToBottom()
+					})
 				}()
 			} else {
 				results.Text = fmt.Sprintf("  Results:  %d", count)
-				results.Refresh()
+
+				fyne.Do(func() {
+					results.Refresh()
+				})
 			}
 		default:
 
@@ -10053,10 +10080,10 @@ func layoutHistoryDetail(txid string) fyne.CanvasObject {
 	btnView := widget.NewButton("View in Explorer", nil)
 	btnView.OnTapped = func() {
 		if engram.Disk.GetNetwork() {
-			link, _ := url.Parse("https://explorer.dero.io/tx/" + txid)
+			link, _ := url.Parse("https://explorer.derofoundation.org/tx/" + txid)
 			_ = fyne.CurrentApp().OpenURL(link)
 		} else {
-			link, _ := url.Parse("https://testnetexplorer.dero.io/tx/" + txid)
+			link, _ := url.Parse("https://testnetexplorer.derofoundation.org/tx/" + txid)
 			_ = fyne.CurrentApp().OpenURL(link)
 		}
 	}
@@ -10071,35 +10098,35 @@ func layoutHistoryDetail(txid string) fyne.CanvasObject {
 
 	linkAddress := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkAddress.OnTapped = func() {
-		session.Window.Clipboard().SetContent(valueMember.String())
+		a.Clipboard().SetContent(valueMember.String())
 	}
 
 	linkiAddress := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkiAddress.OnTapped = func() {
-		session.Window.Clipboard().SetContent(valueiMember.String())
+		a.Clipboard().SetContent(valueiMember.String())
 	}
 
 	linkReplyAddress := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkReplyAddress.OnTapped = func() {
 		if replyAddress, ok := details.Payload_RPC.Value(rpc.RPC_REPLYBACK_ADDRESS, rpc.DataAddress).(rpc.Address); ok {
-			session.Window.Clipboard().SetContent(replyAddress.String())
+			a.Clipboard().SetContent(replyAddress.String())
 		}
 	}
 
 	linkTXID := widget.NewHyperlinkWithStyle("Copy Transaction ID", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkTXID.OnTapped = func() {
-		session.Window.Clipboard().SetContent(txid)
+		a.Clipboard().SetContent(txid)
 	}
 
 	linkProof := widget.NewHyperlinkWithStyle("Copy Transaction Proof", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkProof.OnTapped = func() {
-		session.Window.Clipboard().SetContent(details.Proof)
+		a.Clipboard().SetContent(details.Proof)
 	}
 
 	linkPayload := widget.NewHyperlinkWithStyle("Copy Payload", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkPayload.OnTapped = func() {
 		if _, ok := details.Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string); ok {
-			session.Window.Clipboard().SetContent(details.Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string))
+			a.Clipboard().SetContent(details.Payload_RPC.Value(rpc.RPC_COMMENT, rpc.DataString).(string))
 		}
 	}
 
@@ -10910,7 +10937,7 @@ func layoutPad() fyne.CanvasObject {
 		err = StoreEncryptedValue("Datapads", []byte(session.Datapad), []byte(entryPad.Text))
 		if err != nil {
 			btnSave.Disable()
-			errorText.Text = "error saving datapad"
+			errorText.Text = "-  FAILED  -"
 			errorText.Color = colors.Red
 			errorText.Refresh()
 		} else {
@@ -10918,7 +10945,7 @@ func layoutPad() fyne.CanvasObject {
 			btnSave.Disable()
 			heading.Text = session.Datapad
 			heading.Refresh()
-			errorText.Text = "datapad saved successfully"
+			errorText.Text = "-  SAVED  -"
 			errorText.Color = colors.Green
 			errorText.Refresh()
 		}
@@ -11303,7 +11330,7 @@ func layoutAccount() fyne.CanvasObject {
 
 	linkCopyAddress := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkCopyAddress.OnTapped = func() {
-		session.Window.Clipboard().SetContent(engram.Disk.GetAddress().String())
+		a.Clipboard().SetContent(engram.Disk.GetAddress().String())
 	}
 
 	btnClear := widget.NewButton("Delete Datashard", nil)
@@ -12093,7 +12120,7 @@ func layoutRecovery() fyne.CanvasObject {
 	}
 
 	btnCopySeed.OnTapped = func() {
-		session.Window.Clipboard().SetContent(engram.Disk.GetSeed())
+		a.Clipboard().SetContent(engram.Disk.GetSeed())
 	}
 
 	layout := container.NewBorder(
@@ -12246,11 +12273,11 @@ func layoutRecoveryHex() fyne.CanvasObject {
 	))
 
 	linkCopySecret.OnTapped = func() {
-		session.Window.Clipboard().SetContent(secret)
+		a.Clipboard().SetContent(secret)
 	}
 
 	linkCopyPublic.OnTapped = func() {
-		session.Window.Clipboard().SetContent(public)
+		a.Clipboard().SetContent(public)
 	}
 
 	layout := container.NewBorder(
@@ -13514,8 +13541,7 @@ func layoutContractEditor(filename, filedata string) fyne.CanvasObject {
 			for n, f := range contract.Functions {
 				if n == "InitializePrivate" || n == "Initialize" {
 					for _, line := range f.Lines {
-						lineLen := len(line) - 1
-						if lineLen < 5 {
+						if len(line) < 6 {
 							// Line is to short to be a STORE
 							continue
 						}
@@ -13523,11 +13549,12 @@ func layoutContractEditor(filename, filedata string) fyne.CanvasObject {
 						for i, parts := range line {
 							if parts == "STORE" {
 								// Find if code is storing headers
-								if line[i+2] == `"nameHdr"` {
+								header := tela.Header(line[i+2])
+								if header == tela.HEADER_NAME || header == tela.HEADER_NAME_V2 {
 									nameHdr = strings.Trim(line[i+4], `"`)
-								} else if line[i+2] == `"iconURLHdr"` {
+								} else if header == tela.HEADER_ICON_URL || header == tela.HEADER_ICON_URL_V2 {
 									iconURLHdr = strings.Trim(line[i+4], `"`)
-								} else if line[i+2] == `"descrHdr"` {
+								} else if header == tela.HEADER_DESCRIPTION || header == tela.HEADER_DESCRIPTION_V2 {
 									descrHdr = strings.Trim(line[i+4], `"`)
 								}
 							}
@@ -14017,8 +14044,7 @@ func layoutContractEditor(filename, filedata string) fyne.CanvasObject {
 						// Find initialize func
 						if name == "Initialize" || name == "InitializePrivate" {
 							for _, line := range function.Lines {
-								lineLen := len(line) - 1
-								if lineLen < 5 {
+								if len(line) < 6 {
 									// Line is to short to be a STORE
 									continue
 								}
@@ -14026,13 +14052,14 @@ func layoutContractEditor(filename, filedata string) fyne.CanvasObject {
 								for i, parts := range line {
 									if parts == "STORE" {
 										// Find if code is storing headers and update vars with header entry value
-										if line[i+2] == `"nameHdr"` {
+										header := tela.Header(line[i+2])
+										if header == tela.HEADER_NAME || header == tela.HEADER_NAME_V2 {
 											haveHeader[0] = true
 											line[i+4] = fmt.Sprintf(`"%s"`, entryName.Text)
-										} else if line[i+2] == `"iconURLHdr"` {
+										} else if header == tela.HEADER_ICON_URL || header == tela.HEADER_ICON_URL_V2 {
 											haveHeader[1] = true
 											line[i+4] = fmt.Sprintf(`"%s"`, entryIcon.Text)
-										} else if line[i+2] == `"descrHdr"` {
+										} else if header == tela.HEADER_DESCRIPTION || header == tela.HEADER_DESCRIPTION_V2 {
 											haveHeader[2] = true
 											line[i+4] = fmt.Sprintf(`"%s"`, entryDescription.Text)
 										}
@@ -14112,10 +14139,7 @@ func layoutContractEditor(filename, filedata string) fyne.CanvasObject {
 											switch u {
 											case 1: // nameHdr
 												if !haveHeader[0] {
-													function.Lines[addLineNum] = []string{"STORE", "(", `"nameHdr"`, ",", fmt.Sprintf(`"%s"`, entryName.Text), ")"}
-													if u != 1 {
-														function.LineNumbers = append(function.LineNumbers, addLineNum)
-													}
+													function.Lines[addLineNum] = []string{"STORE", "(", `"var_header_name"`, ",", fmt.Sprintf(`"%s"`, entryName.Text), ")"}
 													addedLines++
 												} else {
 													// Count skip if we have already to subtract to line number
@@ -14124,8 +14148,8 @@ func layoutContractEditor(filename, filedata string) fyne.CanvasObject {
 												}
 											case 2: // iconURLHdr
 												if !haveHeader[1] {
-													function.Lines[addLineNum] = []string{"STORE", "(", `"iconURLHdr"`, ",", fmt.Sprintf(`"%s"`, entryIcon.Text), ")"}
-													if u != 1 && skipedLines != 1 {
+													function.Lines[addLineNum] = []string{"STORE", "(", `"var_header_icon"`, ",", fmt.Sprintf(`"%s"`, entryIcon.Text), ")"}
+													if skipedLines != 1 {
 														function.LineNumbers = append(function.LineNumbers, addLineNum)
 													}
 													addedLines++
@@ -14135,8 +14159,8 @@ func layoutContractEditor(filename, filedata string) fyne.CanvasObject {
 												}
 											case 3: // descrHdr
 												if !haveHeader[2] {
-													function.Lines[addLineNum] = []string{"STORE", "(", `"descrHdr"`, ",", fmt.Sprintf(`"%s"`, entryDescription.Text), ")"}
-													if u != 1 && skipedLines != 2 {
+													function.Lines[addLineNum] = []string{"STORE", "(", `"var_header_description"`, ",", fmt.Sprintf(`"%s"`, entryDescription.Text), ")"}
+													if skipedLines != 2 {
 														function.LineNumbers = append(function.LineNumbers, addLineNum)
 													}
 													addedLines++
@@ -14902,15 +14926,18 @@ func layoutTELA() fyne.CanvasObject {
 
 	btnShutdown := widget.NewButton("Shutdown TELA", nil)
 
-	var rescanRecheck bool
-	var lastScan, searchExclusions string
+	var restrictiveMode, rescanRecheck bool
+	var lastScan, searchExclusions, sortBy string
 	var minLikes float64
 	var telaSCIDs []string
-	var telaSearch []tela.INDEX
+	var telaSearch []INDEXwithRatings
 	var sAll = map[string]bool{}
 
 	getSearchResults := func() {
-		entrySearch.Disable()
+		fyne.Do(func() {
+			entrySearch.Disable()
+			entryAddSCID.Disable()
+		})
 		if isSearching {
 			return
 		}
@@ -14919,32 +14946,44 @@ func layoutTELA() fyne.CanvasObject {
 
 		// Already scanned
 		if len(telaSearch) > 0 {
-			searching = telaSearchDisplayAll(telaSearch)
+			searching = telaSearchDisplayAll(telaSearch, sortBy)
 			searchData.Set(searching)
 
 			results.Text = fmt.Sprintf("  TELA SCIDs:  %d", len(telaSearch))
 			results.Color = colors.Green
-			results.Refresh()
-			entrySearch.Enable()
+			fyne.Do(func() {
+				entrySearch.Enable()
+				entryAddSCID.Enable()
+			})
 
 			labelLastScan.Text = fmt.Sprintf("  %s", lastScan)
 			labelLastScan.Color = colors.Green
-			labelLastScan.Refresh()
 			isSearching = false
+
+			fyne.Do(func() {
+				results.Refresh()
+				labelLastScan.Refresh()
+			})
 
 			return
 		}
 
-		telaSearch = []tela.INDEX{}
+		telaSearch = []INDEXwithRatings{}
 		searchData.Set(nil)
-		btnShutdown.Disable()
 		labelLastScan.Text = ""
-		labelLastScan.Refresh()
+
+		fyne.Do(func() {
+			btnShutdown.Disable()
+			labelLastScan.Refresh()
+		})
+
 		defer func() {
 			isSearching = false
 			if !session.Offline && gnomon.Index != nil {
 				if btnShutdown.Disabled() {
-					btnShutdown.Enable()
+					fyne.Do(func() {
+						btnShutdown.Enable()
+					})
 				}
 			}
 		}()
@@ -14958,20 +14997,29 @@ func layoutTELA() fyne.CanvasObject {
 				return
 			}
 
-			entrySearch.Disable()
+			fyne.Do(func() {
+				entrySearch.Disable()
+				entryAddSCID.Disable()
+			})
 			results.Text = "  Gnomon is syncing..."
 			results.Color = colors.Yellow
-			results.Refresh()
+
+			fyne.Do(func() {
+				results.Refresh()
+			})
+
 			time.Sleep(time.Second)
 		}
 
-		storedAllSCIDs, err := GetEncryptedValue("TELA Search", []byte("Searched SCIDs"))
-		if err != nil {
-			// Nothing stored, scan for SCIDs
-			sAll = map[string]bool{}
-			logger.Debugf("[Engram] Could not get stored TELA Searched SCIDs: %s\n", err)
-		} else {
-			json.Unmarshal(storedAllSCIDs, &sAll)
+		if !restrictiveMode {
+			storedAllSCIDs, err := GetEncryptedValue("TELA Search", []byte("Searched SCIDs"))
+			if err != nil {
+				// Nothing stored, scan for SCIDs
+				sAll = map[string]bool{}
+				logger.Debugf("[Engram] Could not get stored TELA Searched SCIDs: %s\n", err)
+			} else {
+				json.Unmarshal(storedAllSCIDs, &sAll)
+			}
 		}
 
 		storedSCIDs, err := GetEncryptedValue("TELA Search", []byte("SCIDs"))
@@ -14983,41 +15031,64 @@ func layoutTELA() fyne.CanvasObject {
 			// Have stored SCIDs
 			json.Unmarshal(storedSCIDs, &telaSCIDs)
 
+			results.Text = "  Scanning..."
+			results.Color = colors.Yellow
+
+			fyne.Do(func() {
+				results.Refresh()
+			})
+
 			for i, sc := range telaSCIDs {
 				if index, err := tela.GetINDEXInfo(sc, session.Daemon); err == nil {
 					if gnomon.GetAllSCIDVariableDetails(sc) == nil {
 						results.Text = fmt.Sprintf("  Adding... (%d / %d)", i, len(telaSCIDs))
 						results.Color = colors.Yellow
-						results.Refresh()
+						fyne.Do(func() {
+							results.Refresh()
+						})
 
 						gnomon.AddSCIDToIndex(sc)
 					}
 
-					_, err := getLikesRatio(sc, index.DURL, searchExclusions, minLikes)
-					if err != nil {
-						continue
-					}
+					if !restrictiveMode {
+						_, ratings, err := getLikesRatio(sc, index.DURL, searchExclusions, minLikes)
+						if err != nil {
+							continue
+						}
 
-					telaSearch = append(telaSearch, index)
+						telaSearch = append(telaSearch, INDEXwithRatings{ratings: ratings, INDEX: index})
+					}
 				}
 			}
 
 			// If recheck is false, run a rescan that pulls in any new contracts when first OnChanged to Search
 			if rescanRecheck && (len(telaSearch) > 0 || len(telaSCIDs) > 0) {
-				searching = telaSearchDisplayAll(telaSearch)
+				searching = telaSearchDisplayAll(telaSearch, sortBy)
 				searchData.Set(searching)
 
 				results.Text = fmt.Sprintf("  TELA SCIDs:  %d", len(telaSearch))
 				results.Color = colors.Green
-				results.Refresh()
-				entrySearch.Enable()
+				fyne.Do(func() {
+					entrySearch.Enable()
+					entryAddSCID.Enable()
+				})
 
 				if last, err := GetEncryptedValue("TELA Search", []byte("Last Scan")); err == nil {
 					lastScan = string(last)
 					labelLastScan.Text = fmt.Sprintf("  %s", lastScan)
 					labelLastScan.Color = colors.Green
-					labelLastScan.Refresh()
 				}
+
+				if restrictiveMode && len(telaSearch) < 1 {
+					errorText.Text = "TELA is in restrictive mode"
+					errorText.Color = colors.Yellow
+				}
+
+				fyne.Do(func() {
+					results.Refresh()
+					labelLastScan.Refresh()
+					errorText.Refresh()
+				})
 
 				return
 			}
@@ -15025,7 +15096,15 @@ func layoutTELA() fyne.CanvasObject {
 
 		var wg sync.WaitGroup
 
-		all := gnomon.GetAllOwnersAndSCIDs()
+		var all = map[string]string{}
+		if restrictiveMode {
+			for _, sc := range telaSCIDs {
+				all[sc] = ""
+			}
+		} else {
+			all = gnomon.GetAllOwnersAndSCIDs()
+		}
+
 		allLen := len(all)
 		scanned := 0
 		workers := make(chan struct{}, runtime.NumCPU())
@@ -15039,7 +15118,10 @@ func layoutTELA() fyne.CanvasObject {
 			scanned++
 			results.Text = fmt.Sprintf("  Scanning... (%d / %d)", scanned, allLen)
 			results.Color = colors.Yellow
-			results.Refresh()
+
+			fyne.Do(func() {
+				results.Refresh()
+			})
 
 			wg.Add(1)
 			go func(scid string) {
@@ -15048,7 +15130,8 @@ func layoutTELA() fyne.CanvasObject {
 					wg.Done()
 				}()
 
-				if !rescanRecheck && (sAll[scid] || scidExist(telaSCIDs, scid)) {
+				// Restrictive mode rechecks everytime, if rescan recheck is disabled SCIDs that have already been scanned won't be rechecked for faster list population
+				if !restrictiveMode && !rescanRecheck && (sAll[scid] || scidExist(telaSCIDs, scid)) {
 					return
 				}
 
@@ -15060,7 +15143,7 @@ func layoutTELA() fyne.CanvasObject {
 				if vs != nil {
 					if index, err := tela.GetINDEXInfo(scid, session.Daemon); err == nil {
 						if len(index.DOCs) > 0 {
-							if strings.HasSuffix(index.DURL, tela.TAG_LIBRARY) || strings.Contains(index.DURL, tela.TAG_DOC_SHARDS) {
+							if strings.HasSuffix(index.DURL, tela.TAG_LIBRARY) || strings.HasSuffix(index.DURL, tela.TAG_DOC_SHARDS) || strings.HasSuffix(index.DURL, tela.TAG_BOOTSTRAP) {
 								return
 							}
 
@@ -15068,14 +15151,17 @@ func layoutTELA() fyne.CanvasObject {
 								gnomon.AddSCIDToIndex(scid)
 							}
 
-							telaSCIDs = append(telaSCIDs, scid)
+							// In restrictive mode, the list is initialzed from telaSCIDs
+							if !restrictiveMode {
+								telaSCIDs = append(telaSCIDs, scid)
+							}
 
-							_, err := getLikesRatio(scid, index.DURL, searchExclusions, minLikes)
+							_, ratings, err := getLikesRatio(scid, index.DURL, searchExclusions, minLikes)
 							if err != nil {
 								return
 							}
 
-							telaSearch = append(telaSearch, index)
+							telaSearch = append(telaSearch, INDEXwithRatings{ratings: ratings, INDEX: index})
 						}
 					}
 				}
@@ -15088,12 +15174,15 @@ func layoutTELA() fyne.CanvasObject {
 
 		wg.Wait()
 
-		searching = telaSearchDisplayAll(telaSearch)
+		searching = telaSearchDisplayAll(telaSearch, sortBy)
 		searchData.Set(searching)
 
 		results.Text = fmt.Sprintf("  TELA SCIDs:  %d", len(telaSearch))
 		results.Color = colors.Green
-		results.Refresh()
+
+		fyne.Do(func() {
+			results.Refresh()
+		})
 
 		timeNow := time.Now().Format(time.RFC822)
 		StoreEncryptedValue("TELA Search", []byte("Last Scan"), []byte(timeNow))
@@ -15101,7 +15190,7 @@ func layoutTELA() fyne.CanvasObject {
 			StoreEncryptedValue("TELA Search", []byte("SCIDs"), storeSCIDs)
 		}
 
-		if !rescanRecheck {
+		if !restrictiveMode && !rescanRecheck {
 			for sc := range all {
 				sAll[sc] = true
 			}
@@ -15109,13 +15198,21 @@ func layoutTELA() fyne.CanvasObject {
 			if sAllSCIDs, err := json.Marshal(sAll); err == nil {
 				StoreEncryptedValue("TELA Search", []byte("Searched SCIDs"), sAllSCIDs)
 			}
+		} else if restrictiveMode && len(searching) < 1 {
+			errorText.Text = "TELA is in restrictive mode"
+			errorText.Color = colors.Yellow
+			errorText.Refresh()
 		}
 
 		lastScan = timeNow
 		labelLastScan.Text = fmt.Sprintf("  %s", lastScan)
 		labelLastScan.Color = colors.Green
-		labelLastScan.Refresh()
-		entrySearch.Enable()
+
+		fyne.Do(func() {
+			labelLastScan.Refresh()
+			entrySearch.Enable()
+			entryAddSCID.Enable()
+		})
 	}
 
 	entrySearch.OnChanged = func(s string) {
@@ -15140,26 +15237,26 @@ func layoutTELA() fyne.CanvasObject {
 			}
 		}
 
-		var queryResult []string
+		var queryResult []INDEXwithRatings
 		query := strings.Split(s, ":")
 		if len(query) < 2 {
 			if len(s) == 64 {
 				// Search scid
 				for _, ind := range telaSearch {
-					_, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
+					_, _, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
 					if err != nil {
 						continue
 					}
 
 					if ind.SCID == s {
-						queryResult = append(queryResult, telaSearchDisplay(ind))
+						queryResult = append(queryResult, ind)
 						break
 					}
 				}
 			} else {
 				// Search all
 				for _, ind := range telaSearch {
-					_, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
+					_, _, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
 					if err != nil {
 						continue
 					}
@@ -15173,15 +15270,14 @@ func layoutTELA() fyne.CanvasObject {
 
 					for _, split := range data {
 						if strings.Contains(split, s) {
-							queryResult = append(queryResult, telaSearchDisplay(ind))
+							queryResult = append(queryResult, ind)
 							break
 						}
 					}
 				}
 			}
 
-			sort.Strings(queryResult)
-			searching = queryResult
+			searching = telaSearchDisplayAll(queryResult, sortBy)
 			searchData.Set(searching)
 			searchList.Refresh()
 
@@ -15196,30 +15292,30 @@ func layoutTELA() fyne.CanvasObject {
 		switch query[0] {
 		case "name":
 			for _, ind := range telaSearch {
-				_, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
+				_, _, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
 				if err != nil {
 					continue
 				}
 
 				if strings.Contains(ind.NameHdr, query[1]) {
-					queryResult = append(queryResult, telaSearchDisplay(ind))
+					queryResult = append(queryResult, ind)
 				}
 			}
 		case "durl":
 			for _, ind := range telaSearch {
-				_, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
+				_, _, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
 				if err != nil {
 					continue
 				}
 
 				if strings.Contains(ind.DURL, query[1]) {
-					queryResult = append(queryResult, telaSearchDisplay(ind))
+					queryResult = append(queryResult, ind)
 				}
 			}
 		case "my":
 			for _, ind := range telaSearch {
 				if ind.Author == engram.Disk.GetAddress().String() {
-					queryResult = append(queryResult, telaSearchDisplay(ind))
+					queryResult = append(queryResult, ind)
 				}
 			}
 		case "author":
@@ -15233,13 +15329,13 @@ func layoutTELA() fyne.CanvasObject {
 			}
 
 			for _, ind := range telaSearch {
-				_, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
+				_, _, err := getLikesRatio(ind.SCID, ind.DURL, searchExclusions, minLikes)
 				if err != nil {
 					continue
 				}
 
 				if ind.Author == query[1] {
-					queryResult = append(queryResult, telaSearchDisplay(ind))
+					queryResult = append(queryResult, ind)
 				}
 			}
 		default:
@@ -15250,8 +15346,7 @@ func layoutTELA() fyne.CanvasObject {
 			return
 		}
 
-		sort.Strings(queryResult)
-		searching = queryResult
+		searching = telaSearchDisplayAll(queryResult, sortBy)
 		searchData.Set(searching)
 		searchList.Refresh()
 
@@ -15259,6 +15354,53 @@ func layoutTELA() fyne.CanvasObject {
 		results.Color = colors.Green
 		results.Refresh()
 		entrySearch.Enable()
+	}
+
+	entryAddSCID.OnChanged = func(s string) {
+		if len(s) == 64 {
+			defer entryAddSCID.SetText("")
+			bootstrapIndex, err := tela.GetINDEXInfo(s, session.Daemon)
+			if err != nil {
+				logger.Errorf("[GetINDEXInfo] Bootstrap: %s\n", err)
+				errorText.Text = "could not get bootstrap SCID"
+				errorText.Color = colors.Red
+				errorText.Refresh()
+				return
+			}
+
+			if !strings.HasSuffix(bootstrapIndex.DURL, tela.TAG_BOOTSTRAP) {
+				logger.Errorf("[Engram] SCID %s is not a TELA bootstrap INDEX\n", s)
+				errorText.Text = "invalid bootstrap SCID"
+				errorText.Color = colors.Red
+				errorText.Refresh()
+				return
+			}
+
+			storeSCIDs, err := json.Marshal(bootstrapIndex.DOCs)
+			if err != nil {
+				logger.Errorf("[Engram] Could not marshal bootstrap: %s\n", err)
+				errorText.Text = "error initializing bootstrap"
+				errorText.Color = colors.Red
+				errorText.Refresh()
+				return
+			}
+
+			err = StoreEncryptedValue("TELA Search", []byte("SCIDs"), storeSCIDs)
+			if err != nil {
+				logger.Errorf("[Engram] Could store bootstrap: %s\n", err)
+				errorText.Text = "error storing bootstrap"
+				errorText.Color = colors.Red
+				errorText.Refresh()
+				return
+			}
+
+			telaSCIDs = bootstrapIndex.DOCs
+			errorText.Text = "bootstrap initialized"
+			errorText.Color = colors.Green
+			errorText.Refresh()
+
+			go getSearchResults()
+		}
 	}
 
 	// Refresh the active server list
@@ -15293,7 +15435,7 @@ func layoutTELA() fyne.CanvasObject {
 							return
 						}
 
-						telaSearch = []tela.INDEX{}
+						telaSearch = []INDEXwithRatings{}
 						telaSCIDs = []string{}
 						if rescanRecheck {
 							DeleteKey("TELA Search", []byte("SCIDs"))
@@ -15363,7 +15505,7 @@ func layoutTELA() fyne.CanvasObject {
 		}
 
 		// Clear search results but keep scids
-		telaSearch = []tela.INDEX{}
+		telaSearch = []INDEXwithRatings{}
 
 		minLikes = float64(i)
 		StoreEncryptedValue("TELA Settings", []byte("Min Likes"), []byte(s))
@@ -15386,7 +15528,7 @@ func layoutTELA() fyne.CanvasObject {
 		}
 
 		// Clear search results but keep scids
-		telaSearch = []tela.INDEX{}
+		telaSearch = []INDEXwithRatings{}
 
 		searchExclusions = s
 	}
@@ -15431,6 +15573,24 @@ func layoutTELA() fyne.CanvasObject {
 		StoreEncryptedValue("TELA Settings", []byte("Rescan Recheck"), []byte(s))
 	}
 
+	sortByOptions := []string{"Ratings", "A-Z", "Z-A"}
+	wSortBy := widget.NewSelect(sortByOptions, nil)
+	if storedSortBy, err := GetEncryptedValue("TELA Settings", []byte("Sort By")); err == nil {
+		sortBy = string(storedSortBy)
+	} else {
+		sortBy = sortByOptions[0]
+	}
+
+	wSortBy.SetSelected(sortBy)
+	wSortBy.OnChanged = func(s string) {
+		if s != "" {
+			// Clear search results but keep scids
+			telaSearch = []INDEXwithRatings{}
+			sortBy = s
+			StoreEncryptedValue("TELA Settings", []byte("Sort By"), []byte(s))
+		}
+	}
+
 	historyBox := container.NewStack(
 		rectList,
 		historyList,
@@ -15449,6 +15609,19 @@ func layoutTELA() fyne.CanvasObject {
 	linkSpacer := canvas.NewRectangle(color.Transparent)
 	linkSpacer.SetMinSize(fyne.NewSize(0, 40))
 
+	wMode := widget.NewCheck("Restrictive Mode", nil)
+	wMode.SetChecked(true)
+	restrictiveMode = true
+	if storedTelaMode, err := GetEncryptedValue("TELA Settings", []byte("Mode")); err == nil {
+		switch string(storedTelaMode) {
+		case "Unrestrictive":
+			wMode.SetChecked(false)
+			restrictiveMode = false
+		default:
+			// in restrictive mode
+		}
+	}
+
 	linkResetDefaults := widget.NewHyperlinkWithStyle("Reset Default Settings", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkResetDefaults.OnTapped = func() {
 		verificationOverlay(
@@ -15458,8 +15631,10 @@ func layoutTELA() fyne.CanvasObject {
 			"Confirm",
 			func(b bool) {
 				if b {
+					wMode.SetChecked(true)
 					wUpdates.SetSelectedIndex(0)
 					wRescanRecheck.SetSelectedIndex(0)
+					wSortBy.SetSelectedIndex(0)
 					entryPort.SetText(strconv.Itoa(tela.DEFAULT_PORT_START))
 					entryMinLikes.SetText("30")
 					entryExclusions.SetText("")
@@ -15477,7 +15652,7 @@ func layoutTELA() fyne.CanvasObject {
 			"Confirm",
 			func(b bool) {
 				if b {
-					telaSearch = []tela.INDEX{}
+					telaSearch = []INDEXwithRatings{}
 					telaSCIDs = []string{}
 					DeleteKey("TELA Search", []byte("SCIDs"))
 					DeleteKey("TELA Search", []byte("Searched SCIDs"))
@@ -15486,6 +15661,42 @@ func layoutTELA() fyne.CanvasObject {
 				}
 			},
 		)
+	}
+
+	wMode.OnChanged = func(b bool) {
+		if b {
+			restrictiveMode = true
+			DeleteKey("TELA Settings", []byte("Mode"))
+			return
+		}
+
+		go func() {
+			unrestrictedPermission, err := AskPermissionForRequestE("TELA Unresctricted Mode", "TELA R OFF")
+			if err != nil {
+				logger.Errorf("[Engram] TELA unrestricted mode: %s\n", err)
+				errorText.Text = "error requesting permission"
+				errorText.Color = colors.Red
+
+				fyne.Do(func() {
+					errorText.Refresh()
+				})
+
+				return
+			}
+
+			if unrestrictedPermission != xswd.Allow {
+				wMode.SetChecked(true)
+				return
+			}
+
+			StoreEncryptedValue("TELA Settings", []byte("Mode"), []byte("Unrestrictive"))
+			restrictiveMode = false
+			telaSearch = []INDEXwithRatings{}
+			telaSCIDs = []string{}
+			DeleteKey("TELA Search", []byte("SCIDs"))
+			DeleteKey("TELA Search", []byte("Searched SCIDs"))
+			DeleteKey("TELA Search", []byte("Last Scan"))
+		}()
 	}
 
 	settingsBox := container.NewVScroll(
@@ -15500,6 +15711,14 @@ func layoutTELA() fyne.CanvasObject {
 					container.NewBorder(
 						nil,
 						nil,
+						nil,
+						nil,
+						container.NewCenter(wMode),
+					),
+					rectSpacer,
+					container.NewBorder(
+						nil,
+						nil,
 						widget.NewRichTextFromMarkdown("### Allow Content Updates"),
 						wUpdates,
 					),
@@ -15508,6 +15727,12 @@ func layoutTELA() fyne.CanvasObject {
 						nil,
 						widget.NewRichTextFromMarkdown("### Rescan Recheck"),
 						wRescanRecheck,
+					),
+					container.NewBorder(
+						nil,
+						nil,
+						widget.NewRichTextFromMarkdown("### Sort By"),
+						wSortBy,
 					),
 					container.NewBorder(
 						nil,
@@ -15605,17 +15830,24 @@ func layoutTELA() fyne.CanvasObject {
 					return
 				}
 
-				entryHistory.Disable()
 				results.Text = "  Gnomon is syncing..."
 				results.Color = colors.Yellow
-				results.Refresh()
+
+				fyne.Do(func() {
+					entryHistory.Disable()
+					results.Refresh()
+				})
+
 				time.Sleep(time.Second)
 			}
 
-			entryHistory.Enable()
 			results.Text = "  Loading previous search history..."
 			results.Color = colors.Yellow
-			results.Refresh()
+
+			fyne.Do(func() {
+				entryHistory.Enable()
+				results.Refresh()
+			})
 
 			shard, err := GetShard()
 			if err != nil {
@@ -15667,12 +15899,15 @@ func layoutTELA() fyne.CanvasObject {
 			sort.Strings(historyResults)
 			history = historyResults
 			historyData.Set(history)
-			historyList.Refresh()
 
 			results.Text = fmt.Sprintf("  Search History:  %d", len(historyResults))
 			results.Color = colors.Green
-			results.Refresh()
-			btnShutdown.Enable()
+
+			fyne.Do(func() {
+				historyList.Refresh()
+				results.Refresh()
+				btnShutdown.Enable()
+			})
 		}
 	}
 
@@ -15695,12 +15930,15 @@ func layoutTELA() fyne.CanvasObject {
 		sort.Strings(queryResult)
 		history = queryResult
 		historyData.Set(history)
-		historyList.Refresh()
 
 		results.Text = fmt.Sprintf("  Search History:  %d", len(queryResult))
 		results.Color = colors.Green
-		results.Refresh()
 		entryHistory.Enable()
+
+		fyne.Do(func() {
+			historyList.Refresh()
+			results.Refresh()
+		})
 	}
 
 	wSelect.OnChanged = func(s string) {
@@ -15854,7 +16092,11 @@ func layoutTELA() fyne.CanvasObject {
 					logger.Errorf("[Engram] Open TELA link: %s\n", err)
 					errorText.Text = "error could not open TELA"
 					errorText.Color = colors.Red
-					errorText.Refresh()
+
+					fyne.Do(func() {
+						errorText.Refresh()
+					})
+
 					return
 				}
 
@@ -15907,14 +16149,17 @@ func layoutTELA() fyne.CanvasObject {
 						logger.Errorf("[Engram] TELA URL parse: %s\n", err)
 						errorText.Text = "error could parse URL"
 						errorText.Color = colors.Red
-						errorText.Refresh()
+
+						fyne.Do(func() {
+							errorText.Refresh()
+						})
+
 						return // If url is not valid, scid won't be saved in history
 					} else {
 						err = fyne.CurrentApp().OpenURL(url)
 						if err != nil {
 							errorText.Text = "error could not open browser"
 							errorText.Color = colors.Red
-							errorText.Refresh()
 						}
 					}
 
@@ -15923,11 +16168,9 @@ func layoutTELA() fyne.CanvasObject {
 						sort.Strings(historyResults)
 						history = historyResults
 						historyData.Set(history)
-						historyList.Refresh()
 
 						results.Text = fmt.Sprintf("  Search History:  %d", len(historyResults))
 						results.Color = colors.Green
-						results.Refresh()
 
 						err = StoreEncryptedValue("TELA History", []byte(s), []byte(""))
 						if err != nil {
@@ -15945,7 +16188,11 @@ func layoutTELA() fyne.CanvasObject {
 							logger.Errorf("[Engram] Open TELA link: %s\n", err)
 							errorText.Text = "error could not open TELA"
 							errorText.Color = colors.Red
-							errorText.Refresh()
+
+							fyne.Do(func() {
+								errorText.Refresh()
+							})
+
 							return
 						}
 
@@ -15959,7 +16206,11 @@ func layoutTELA() fyne.CanvasObject {
 							logger.Errorf("[Engram] Error serving TELA: %s\n", err)
 							errorText.Text = telaErrorToString(err)
 							errorText.Color = colors.Red
-							errorText.Refresh()
+
+							fyne.Do(func() {
+								errorText.Refresh()
+							})
+
 							return
 						}
 
@@ -15968,14 +16219,17 @@ func layoutTELA() fyne.CanvasObject {
 							logger.Errorf("[Engram] TELA URL parse: %s\n", err)
 							errorText.Text = "error could parse URL"
 							errorText.Color = colors.Red
-							errorText.Refresh()
+
+							fyne.Do(func() {
+								errorText.Refresh()
+							})
+
 							return
 						} else {
 							err = fyne.CurrentApp().OpenURL(url)
 							if err != nil {
 								errorText.Text = "error could not open browser"
 								errorText.Color = colors.Red
-								errorText.Refresh()
 							}
 						}
 
@@ -15988,7 +16242,6 @@ func layoutTELA() fyne.CanvasObject {
 
 							results.Text = fmt.Sprintf("  Search History:  %d", len(historyResults))
 							results.Color = colors.Green
-							results.Refresh()
 
 							err = StoreEncryptedValue("TELA History", []byte(s), []byte(""))
 							if err != nil {
@@ -16002,8 +16255,13 @@ func layoutTELA() fyne.CanvasObject {
 					logger.Errorf("[Engram] Error serving TELA: %s\n", err)
 					errorText.Text = telaErrorToString(err)
 					errorText.Color = colors.Red
-					errorText.Refresh()
 				}
+
+				fyne.Do(func() {
+					historyList.Refresh()
+					errorText.Refresh()
+					results.Refresh()
+				})
 
 				removeOverlays()
 			}()
@@ -16170,11 +16428,23 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 	rectSpacer := canvas.NewRectangle(color.Transparent)
 	rectSpacer.SetMinSize(fyne.NewSize(6, 5))
 
-	labelName := widget.NewRichTextFromMarkdown(index.NameHdr)
-	labelName.Wrapping = fyne.TextWrapOff
-	labelName.ParseMarkdown("## " + index.NameHdr)
+	labelName := widget.NewRichText(&widget.TextSegment{
+		Text: index.NameHdr,
+		Style: widget.RichTextStyle{
+			Alignment: fyne.TextAlignCenter,
+			ColorName: theme.ColorNameForeground,
+			SizeName:  theme.SizeNameHeadingText,
+			TextStyle: fyne.TextStyle{Bold: true},
+		}})
+	labelName.Wrapping = fyne.TextWrapWord
 
-	labelDesc := widget.NewRichTextFromMarkdown(index.DescrHdr)
+	labelDesc := widget.NewRichText(&widget.TextSegment{
+		Text: index.DescrHdr,
+		Style: widget.RichTextStyle{
+			Alignment: fyne.TextAlignCenter,
+			ColorName: theme.ColorNameForeground,
+			TextStyle: fyne.TextStyle{Bold: false},
+		}})
 	labelDesc.Wrapping = fyne.TextWrapWord
 
 	labelDURL := canvas.NewText("   DURL", colors.Gray)
@@ -16196,17 +16466,17 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 	linkViewExplorer := widget.NewHyperlinkWithStyle("View in Explorer", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	linkViewExplorer.OnTapped = func() {
 		if engram.Disk.GetNetwork() {
-			link, _ := url.Parse("https://explorer.dero.io/tx/" + index.SCID)
+			link, _ := url.Parse("https://explorer.derofoundation.org/tx/" + index.SCID)
 			_ = fyne.CurrentApp().OpenURL(link)
 		} else {
-			link, _ := url.Parse("https://testnetexplorer.dero.io/tx/" + index.SCID)
+			link, _ := url.Parse("https://testnetexplorer.derofoundation.org/tx/" + index.SCID)
 			_ = fyne.CurrentApp().OpenURL(link)
 		}
 	}
 
 	linkCopySCID := widget.NewHyperlinkWithStyle("Copy SCID", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkCopySCID.OnTapped = func() {
-		session.Window.Clipboard().SetContent(index.SCID)
+		a.Clipboard().SetContent(index.SCID)
 	}
 
 	labelAuthor := canvas.NewText("   SMART  CONTRACT  AUTHOR", colors.Gray)
@@ -16214,7 +16484,11 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 	labelAuthor.Alignment = fyne.TextAlignLeading
 	labelAuthor.TextStyle = fyne.TextStyle{Bold: true}
 
-	textAuthor := widget.NewRichTextFromMarkdown(index.Author)
+	author := index.Author
+	if author == "anon" {
+		author = "--"
+	}
+	textAuthor := widget.NewRichTextFromMarkdown(author)
 	textAuthor.Wrapping = fyne.TextWrapWord
 
 	linkMessageAuthor := widget.NewHyperlinkWithStyle("Message the Author", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
@@ -16229,35 +16503,17 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 
 	linkCopyAuthor := widget.NewHyperlinkWithStyle("Copy Address", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkCopyAuthor.OnTapped = func() {
-		session.Window.Clipboard().SetContent(index.Author)
+		a.Clipboard().SetContent(index.Author)
 	}
 
-	labelRatings := canvas.NewText("   TELA  RATINGS", colors.Gray)
-	labelRatings.TextSize = 14
-	labelRatings.Alignment = fyne.TextAlignLeading
-	labelRatings.TextStyle = fyne.TextStyle{Bold: true}
-
-	textLikes := widget.NewRichTextFromMarkdown("Likes:")
-	textDislikes := widget.NewRichTextFromMarkdown("Dislikes:")
-	textAverage := widget.NewRichTextFromMarkdown("Average:")
-
-	ratingsBox := container.NewVBox(labelRatings)
-
-	ratings, err := tela.GetRating(index.SCID, session.Daemon, 0)
-	if err == nil {
-		ratingsBox.Add(container.NewHBox(textLikes, canvas.NewText(fmt.Sprintf("%d", ratings.Likes), colors.Green)))
-		ratingsBox.Add(container.NewHBox(textDislikes, canvas.NewText(fmt.Sprintf("%d", ratings.Dislikes), colors.Red)))
-		ratingsBox.Add(container.NewHBox(textAverage, canvas.NewText(fmt.Sprintf("%0.1f/10", ratings.Average), colors.Account)))
-	}
-
-	labelStatus := canvas.NewText("   APPLICATION  STATUS", colors.Gray)
+	labelStatus := canvas.NewText("APPLICATION  STATUS", colors.Gray)
 	labelStatus.TextSize = 14
-	labelStatus.Alignment = fyne.TextAlignLeading
+	labelStatus.Alignment = fyne.TextAlignCenter
 	labelStatus.TextStyle = fyne.TextStyle{Bold: true}
 
-	textStatus := canvas.NewText("   Offline", colors.Red)
-	textStatus.TextSize = 14
-	textStatus.Alignment = fyne.TextAlignLeading
+	textStatus := canvas.NewText("Offline", colors.Gray)
+	textStatus.TextSize = 22
+	textStatus.Alignment = fyne.TextAlignCenter
 	textStatus.TextStyle = fyne.TextStyle{Bold: true}
 
 	labelSeparator := widget.NewRichTextFromMarkdown("")
@@ -16275,9 +16531,9 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 	labelSeparator5 := widget.NewRichTextFromMarkdown("")
 	labelSeparator5.Wrapping = fyne.TextWrapOff
 	labelSeparator5.ParseMarkdown("---")
-	labelSeparator6 := widget.NewRichTextFromMarkdown("")
-	labelSeparator6.Wrapping = fyne.TextWrapOff
-	labelSeparator6.ParseMarkdown("---")
+	// labelSeparator6 := widget.NewRichTextFromMarkdown("")
+	// labelSeparator6.Wrapping = fyne.TextWrapOff
+	// labelSeparator6.ParseMarkdown("---")
 
 	menuLabel := canvas.NewText("  M O R E   O P T I O N S  ", colors.Gray)
 	menuLabel.TextSize = 11
@@ -16314,33 +16570,19 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 	}
 
 	image := canvas.NewImageFromResource(resourceTelaIcon)
-	image.SetMinSize(fyne.NewSize(ui.Width*0.2, ui.Width*0.2))
+	image.SetMinSize(fyne.NewSize(ui.Width*0.3, ui.Width*0.3))
 	image.FillMode = canvas.ImageFillContain
 
-	if index.IconHdr != "" {
-		path, err := fyne.LoadResourceFromURLString(index.IconHdr)
-		if err != nil {
-			image.Resource = resourceTelaIcon
+	_, _, iconURLHdr, _, _ := getContractHeader(crypto.HashHexToHash(index.SCID))
+	if iconURLHdr == "" && index.IconHdr != "" {
+		iconURLHdr = index.IconHdr
+	}
+
+	if iconURLHdr != "" {
+		if img, err := handleImageURL(index.NameHdr, iconURLHdr, fyne.NewSize(ui.Width*0.3, ui.Width*0.3)); err == nil {
+			image = img
 		} else {
-			image.Resource = path
-		}
-
-		image.SetMinSize(fyne.NewSize(ui.Width*0.3, ui.Width*0.3))
-		image.FillMode = canvas.ImageFillContain
-		image.Refresh()
-	}
-
-	linkRate := widget.NewHyperlinkWithStyle("Rate SCID", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	linkRate.OnTapped = func() {
-		rateTELAOverlay(index.NameHdr, index.SCID)
-	}
-	linkRate.Hide()
-
-	// Check if wallet has rated SCID
-	if gnomon.Index != nil {
-		ratingStore, _ := gnomon.GetSCIDValuesByKey(index.SCID, engram.Disk.GetAddress().String())
-		if ratingStore == nil {
-			linkRate.Show()
+			logger.Errorf("[Engram] Could not validate icon image: %s\n", err)
 		}
 	}
 
@@ -16351,7 +16593,7 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 	spacerStatus := canvas.NewRectangle(color.Transparent)
 	spacerStatus.SetMinSize(fyne.NewSize(0, 34))
 
-	linkOpenInBrowser := widget.NewHyperlinkWithStyle("Open in Browser", nil, fyne.TextAlignTrailing, fyne.TextStyle{Bold: true})
+	linkOpenInBrowser := widget.NewHyperlinkWithStyle("Open in Browser", nil, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	linkOpenInBrowser.Hide()
 	linkOpenInBrowser.OnTapped = func() {
 		params := fmt.Sprintf("tela://open/%s", index.SCID)
@@ -16391,8 +16633,9 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 	}
 
 	btnServer := widget.NewButton("Start Application", nil)
+
 	if tela.HasServer(index.DURL) {
-		textStatus.Text = "   Online"
+		textStatus.Text = "Running"
 		textStatus.Color = colors.Green
 		textStatus.Refresh()
 		btnServer.Text = "Shutdown Application"
@@ -16405,8 +16648,8 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 			tela.ShutdownServer(index.DURL)
 			errorText.Text = ""
 			errorText.Refresh()
-			textStatus.Text = "   Offline"
-			textStatus.Color = colors.Red
+			textStatus.Text = "Offline"
+			textStatus.Color = colors.Gray
 			textStatus.Refresh()
 			btnServer.Text = "Start Application"
 			btnServer.Refresh()
@@ -16430,7 +16673,7 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 					}
 				}
 
-				textStatus.Text = "   Online"
+				textStatus.Text = "Running"
 				textStatus.Color = colors.Green
 				textStatus.Refresh()
 				btnServer.Text = "Shutdown Application"
@@ -16511,6 +16754,30 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 		}
 	}
 
+	ratings, err := tela.GetRating(index.SCID, session.Daemon, 0)
+	if err != nil {
+		logger.Errorf("[Engram] GetRating: %s\n", err)
+	}
+
+	labelRatingAverage := canvas.NewText(fmt.Sprintf("%.1f", ratings.Average), colors.Account)
+	labelRatingAverage.TextSize = 24
+	labelRatingAverage.Alignment = fyne.TextAlignCenter
+	labelRatingAverage.TextStyle = fyne.TextStyle{Bold: true}
+
+	linkTelaRatings := widget.NewHyperlinkWithStyle("View All Ratings", nil, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	linkTelaRatings.OnTapped = func() {
+		showLoadingOverlay()
+		err := viewTELARatingsOverlay(index.NameHdr, index.SCID)
+		if err != nil {
+			errorText.Text = err.Error()
+			errorText.Color = colors.Red
+			errorText.Refresh()
+		}
+	}
+
+	hexagonImg := canvas.NewImageFromResource(telaHexagonColor(ratings.Average))
+	hexagonImg.SetMinSize(fyne.NewSize(80, 86))
+
 	center := container.NewStack(
 		rectBox,
 		container.NewVScroll(
@@ -16523,14 +16790,16 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 							image,
 						),
 						rectSpacer,
-						container.NewVBox(
+						labelName,
+						rectSpacer,
+						container.NewHBox(
 							layout.NewSpacer(),
-							labelName,
+							container.NewStack(
+								rectWidth90,
+								labelDesc,
+							),
 							layout.NewSpacer(),
 						),
-						rectSpacer,
-						rectSpacer,
-						labelDesc,
 						rectSpacer,
 						rectSpacer,
 						labelSeparator,
@@ -16543,21 +16812,43 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 						labelSeparator2,
 						rectSpacer,
 						rectSpacer,
-						labelStatus,
-						rectSpacer,
-						container.NewHBox(
-							textStatus,
-							layout.NewSpacer(),
-							spacerStatus,
-							linkOpenInBrowser,
+						container.NewStack(
+							container.NewHBox(
+								layout.NewSpacer(),
+								container.NewStack(
+									hexagonImg,
+									container.NewCenter(
+										labelRatingAverage,
+									),
+								),
+								layout.NewSpacer(),
+							),
 						),
 						rectSpacer,
-						errorText,
 						rectSpacer,
-						btnServer,
+						container.NewHBox(
+							layout.NewSpacer(),
+							linkTelaRatings,
+							layout.NewSpacer(),
+						),
 						rectSpacer,
 						rectSpacer,
 						labelSeparator3,
+						rectSpacer,
+						rectSpacer,
+						labelStatus,
+						rectSpacer,
+						textStatus,
+						rectSpacer,
+						rectSpacer,
+						btnServer,
+						rectSpacer,
+						linkOpenInBrowser,
+						rectSpacer,
+						errorText,
+						rectSpacer,
+						rectSpacer,
+						labelSeparator4,
 						rectSpacer,
 						rectSpacer,
 						labelAuthor,
@@ -16572,7 +16863,7 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 						),
 						rectSpacer,
 						rectSpacer,
-						labelSeparator4,
+						labelSeparator5,
 						rectSpacer,
 						rectSpacer,
 						labelSCID,
@@ -16585,26 +16876,6 @@ func layoutTELAManager(index tela.INDEX, callback func()) fyne.CanvasObject {
 							linkCopySCID,
 							layout.NewSpacer(),
 						),
-						rectSpacer,
-						rectSpacer,
-						labelSeparator5,
-						rectSpacer,
-						rectSpacer,
-						rectSpacer,
-						container.NewHBox(
-							layout.NewSpacer(),
-						),
-						ratingsBox,
-						container.NewHBox(
-							layout.NewSpacer(),
-						),
-						container.NewHBox(
-							linkRate,
-							layout.NewSpacer(),
-						),
-						rectSpacer,
-						rectSpacer,
-						labelSeparator6,
 						rectSpacer,
 						rectSpacer,
 						container.NewStack(

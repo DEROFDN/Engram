@@ -109,6 +109,8 @@ func (eTheme) Size(s fyne.ThemeSizeName) float32 {
 		return 15
 	case theme.SizeNameInputBorder:
 		return 2
+	case theme.SizeNameHeadingText:
+		return 24
 	default:
 		return theme.DefaultTheme().Size(s)
 	}
@@ -200,6 +202,8 @@ func (eTheme2) Size(s fyne.ThemeSizeName) float32 {
 		return 15
 	case theme.SizeNameInputBorder:
 		return 2
+	case theme.SizeNameHeadingText:
+		return 24
 	default:
 		return theme.DefaultTheme().Size(s)
 	}
