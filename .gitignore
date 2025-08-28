@@ -1,0 +1,6 @@
+*.idea
+*.apk
+*.db
+datashards*
+mainnet*
+testnet*

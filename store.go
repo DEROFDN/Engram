@@ -34,27 +34,39 @@ func GetDir() (result string, err error) {
 	}
 
 	if runtime.GOOS == "darwin" {
-		if !session.Testnet {
+		switch session.Network {
+		case NETWORK_MAINNET:
 			result = filepath.Join(AppPath(), "Contents", "Resources", "mainnet") + string(filepath.Separator)
-		} else {
+		case NETWORK_SIMULATOR:
+			result = filepath.Join(AppPath(), "Contents", "Resources", "testnet_simulator") + string(filepath.Separator)
+		default:
 			result = filepath.Join(AppPath(), "Contents", "Resources", "testnet") + string(filepath.Separator)
 		}
 	} else if runtime.GOOS == "android" {
-		if !session.Testnet {
+		switch session.Network {
+		case NETWORK_MAINNET:
 			result = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
-		} else {
+		case NETWORK_SIMULATOR:
+			result = filepath.Join(AppPath(), "testnet_simulator") + string(filepath.Separator)
+		default:
 			result = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
 		}
 	} else if runtime.GOOS == "ios" {
-		if !session.Testnet {
+		switch session.Network {
+		case NETWORK_MAINNET:
 			result = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
-		} else {
+		case NETWORK_SIMULATOR:
+			result = filepath.Join(AppPath(), "testnet_simulator") + string(filepath.Separator)
+		default:
 			result = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
 		}
 	} else {
-		if !session.Testnet {
+		switch session.Network {
+		case NETWORK_MAINNET:
 			result = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
-		} else {
+		case NETWORK_SIMULATOR:
+			result = filepath.Join(AppPath(), "testnet_simulator") + string(filepath.Separator)
+		default:
 			result = filepath.Join(AppPath(), "testnet") + string(filepath.Separator)
 		}
 	}
@@ -245,7 +257,7 @@ func GetEncryptedValue(t string, key []byte) (result []byte, err error) {
 		return
 	}
 
-	eValue, _ := tree.Get(key)
+	eValue, err := tree.Get(key)
 	if err != nil {
 		return
 	}

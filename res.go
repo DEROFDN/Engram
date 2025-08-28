@@ -15,30 +15,31 @@
 package main
 
 import (
-	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	x "fyne.io/x/fyne/widget"
+	"github.com/civilware/tela/logger"
 )
 
 type Res struct {
 	bg          *canvas.Image
 	bg2         *canvas.Image
 	icon        *canvas.Image
-	icon_sm     *canvas.Image
 	load        *canvas.Image
 	loading     *x.AnimatedGif
 	header      *canvas.Image
-	spacer      *canvas.Image
 	dero        *canvas.Image
 	gram        *canvas.Image
 	block       *canvas.Image
 	red_alert   *canvas.Image
 	green_alert *canvas.Image
+	mainBg      *canvas.Image
 }
 
 // Get app path
@@ -56,14 +57,22 @@ func AppPath() (result string) {
 func GetAccounts() (result []string, err error) {
 	path := ""
 
-	if !session.Testnet {
+	switch session.Network {
+	case NETWORK_MAINNET:
 		_, err = os.Stat(filepath.Join(AppPath(), "mainnet"))
 		if err != nil {
 			return
 		} else {
 			path = filepath.Join(AppPath(), "mainnet") + string(filepath.Separator)
 		}
-	} else {
+	case NETWORK_SIMULATOR:
+		_, err = os.Stat(filepath.Join(AppPath(), "testnet_simulator"))
+		if err != nil {
+			return
+		} else {
+			path = filepath.Join(AppPath(), "testnet_simulator") + string(filepath.Separator)
+		}
+	default:
 		_, err = os.Stat(filepath.Join(AppPath(), "testnet"))
 		if err != nil {
 			return
@@ -87,9 +96,11 @@ func GetAccounts() (result []string, err error) {
 		}
 	}
 
-	if len(result) == 0 {
-		// TODO: May do something here like start the user at Create/Restore Account window.
-	}
+	/*
+		if len(result) == 0 {
+			// TODO: May do something here like start the user at Create/Restore Account window.
+		}
+	*/
 
 	return
 }
@@ -97,7 +108,7 @@ func GetAccounts() (result []string, err error) {
 func findAccount() (result bool) {
 	matches, err := filepath.Glob(session.Path)
 	if err != nil {
-		fmt.Printf("%s\n", err)
+		logger.Errorf("[Engram] findAccount: %s\n", err)
 	}
 
 	if len(matches) > 0 {
@@ -118,10 +129,28 @@ func checkDir() (err error) {
 	if err != nil {
 		return
 	}
+	err = os.MkdirAll(filepath.Join(AppPath(), "testnet_simulator"), os.ModePerm)
+	if err != nil {
+		return
+	}
 	err = os.MkdirAll(filepath.Join(AppPath(), "datashards"), os.ModePerm)
 	if err != nil {
 		return
 	}
 
 	return
+}
+
+// Write the content to uri
+func writeToURI(content []byte, uri fyne.URIWriteCloser) (n int, err error) {
+	defer uri.Close()
+
+	return uri.Write(content)
+}
+
+// Read the content from uri
+func readFromURI(uri fyne.URIReadCloser) ([]byte, error) {
+	defer uri.Close()
+
+	return io.ReadAll(uri)
 }

@@ -30,7 +30,10 @@ Fixes # (issue)
   - [ ] Module: Asset Explorer
   - [ ] Module: Services
   - [ ] Module: Cyberdeck
+  - [ ] Module: File Manager
+  - [ ] Module: Contract Builder
   - [ ] Module: Datapad
+  - [ ] Module: TELA
   - [ ] Misc (documentation, etc...)
 
 ## Checklist:
