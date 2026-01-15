@@ -56,7 +56,7 @@ go mod tidy
 
 * Build from within the repo directory:
 ```
-fyne package -name Engram -os windows -appVersion 0.6.1 -icon Icon.png
+fyne package -name Engram -os windows -appVersion 0.6.2 -icon Icon.png -tags migrated_fynedo
 ```
 
 #### Building for Android APK (Linux)
@@ -66,7 +66,7 @@ fyne package -name Engram -os windows -appVersion 0.6.1 -icon Icon.png
 * Add environment variable for ANDROID_NDK_HOME to point at the downloaded and extracted ndk directory
 * Build from within the repo directory:
 ```
-fyne package -name Engram -os android/arm64 -appVersion 0.6.1 -appID com.engram.main -icon ./Icon.png
+fyne package -name Engram -os android/arm64 -appVersion 0.6.2 -appID com.engram.main -icon ./Icon.png -tags migrated_fynedo
 ```
 
 ## Contributing

@@ -190,7 +190,9 @@ func NewMobileEntry() *mobileEntry {
 
 func (o *mobileEntry) FocusGained() {
 	o.Entry.FocusGained()
-	o.OnFocusGained()
+	if o.OnFocusGained != nil {
+		o.OnFocusGained()
+	}
 }
 
 type contextMenuButton struct {
